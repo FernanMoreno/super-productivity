@@ -1,3 +1,5 @@
+import { OperationWriteFlushService } from '../op-log/sync/operation-write-flush.service';
+import { OperationCaptureService } from '../op-log/capture/operation-capture.service';
 import { computed, inject, Injectable, Injector, OnDestroy, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { MatDialog } from '@angular/material/dialog';
@@ -1361,12 +1363,7 @@ export class PluginBridgeService implements OnDestroy {
     return chunks;
   }
 
-  /**
-   * Internal method to persist plugin data.
-   * Includes size and rate limit validation; composeId enforces the
-   * `pluginId` keyspace contract at this transport boundary so the throw
-   * covers both iframe and direct API callers.
-   */
+  /** Validate the plugin keyspace and acknowledge only durable plugin data. */
   private async _persistDataSynced(
     pluginId: string,
     dataStr: string,
@@ -1376,17 +1373,20 @@ export class PluginBridgeService implements OnDestroy {
     assertPluginPersistenceKey(key);
 
     try {
-      // Validates the pluginId synchronously; bubbles through the try/catch
-      // below as a normal Error.
       const entityId = composeId(pluginId, key);
-      this._pluginUserPersistenceService.persistPluginUserData(entityId, dataStr);
+      await this._pluginUserPersistenceService.persistPluginUserData(entityId, dataStr);
+      // Dispatch is synchronous, disk persistence is not. Never acknowledge a
+      // save while its operation is only in memory (including coalesced saves).
+      await this._injector.get(OperationWriteFlushService).flushPendingWrites();
+      if (this._injector.get(OperationCaptureService).hasUnrecoveredPersistFailure()) {
+        throw new Error('Plugin data could not be made durable; reload before retrying');
+      }
       PluginLog.log('PluginBridge: Plugin data persisted successfully', {
         pluginId,
         keyLen: key?.length ?? 0,
         dataSize: new Blob([dataStr]).size,
       });
     } catch (error) {
-      // Log the specific error (rate limit, size, or composeId)
       PluginLog.err('PluginBridge: Failed to persist plugin data:', error);
 
       // Rethrow with the original error message for better debugging

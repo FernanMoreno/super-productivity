@@ -1,3 +1,4 @@
+import { getIsApplyingRemoteOps } from '../op-log/capture/operation-capture.meta-reducer';
 import { inject, Injectable } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { firstValueFrom } from 'rxjs';
@@ -47,6 +48,12 @@ export class PluginUserPersistenceService {
    */
   private _pendingData = new Map<string, string>();
 
+  /** Callers sharing a coalesced batch wait for its latest value to dispatch. */
+  private _pendingResults = new Map<
+    string,
+    { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void }
+  >();
+
   /**
    * Active flush timers for coalesced writes, keyed by entity id.
    */
@@ -92,7 +99,7 @@ export class PluginUserPersistenceService {
    * periodic save.
    *
    * Returns a Promise that resolves once the data has been compressed and
-   * dispatched (or queued for a future commit). The size-cap check is
+   * dispatched, including any coalesced batch. The size-cap check is
    * synchronous: callers that hit the limit get a thrown Error, not a
    * rejected Promise, so the existing `try { persist(...) } catch` pattern
    * keeps working.
@@ -127,12 +134,29 @@ export class PluginUserPersistenceService {
     const lastPersist = this._lastPersistTime.get(entityId) || 0;
     const timeSinceLastPersist = now - lastPersist;
 
-    if (timeSinceLastPersist < MIN_PLUGIN_PERSIST_INTERVAL_MS) {
+    if (
+      this._pendingData.has(entityId) ||
+      timeSinceLastPersist < MIN_PLUGIN_PERSIST_INTERVAL_MS
+    ) {
       // Inside the window: coalesce. Hold the latest data and flush it once
       // the window opens, so no write is discarded.
       this._pendingData.set(entityId, data);
+      let result = this._pendingResults.get(entityId);
+      if (!result) {
+        let resolve!: () => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<void>((onResolve, onReject) => {
+          resolve = onResolve;
+          reject = onReject;
+        });
+        // Legacy fire-and-forget callers must not create unhandled rejections.
+        // Awaiting callers still receive the original rejected promise.
+        void promise.catch(() => undefined);
+        result = { promise, resolve, reject };
+        this._pendingResults.set(entityId, result);
+      }
       if (!this._flushTimers.has(entityId)) {
-        const delay = MIN_PLUGIN_PERSIST_INTERVAL_MS - timeSinceLastPersist;
+        const delay = Math.max(0, MIN_PLUGIN_PERSIST_INTERVAL_MS - timeSinceLastPersist);
         this._flushTimers.set(
           entityId,
           setTimeout(() => {
@@ -140,7 +164,7 @@ export class PluginUserPersistenceService {
           }, delay),
         );
       }
-      return Promise.resolve();
+      return result.promise;
     }
 
     return this._commit(entityId, data, now);
@@ -156,7 +180,14 @@ export class PluginUserPersistenceService {
       return;
     }
     this._pendingData.delete(entityId);
-    await this._commit(entityId, data, Date.now());
+    const result = this._pendingResults.get(entityId);
+    this._pendingResults.delete(entityId);
+    try {
+      await this._commit(entityId, data, Date.now());
+      result?.resolve();
+    } catch (error) {
+      result?.reject(error);
+    }
   }
 
   /**
@@ -180,14 +211,15 @@ export class PluginUserPersistenceService {
       .then(() => this._encodeAndDispatch(entityId, data, myGeneration));
     this._commitChain.set(entityId, next);
 
-    next.finally(() => {
+    const cleanup = (): void => {
       if (this._committing.get(entityId) === data) {
         this._committing.delete(entityId);
       }
       if (this._commitChain.get(entityId) === next) {
         this._commitChain.delete(entityId);
       }
-    });
+    };
+    void next.then(cleanup, cleanup);
 
     return next;
   }
@@ -201,7 +233,12 @@ export class PluginUserPersistenceService {
     if ((this._commitGeneration.get(entityId) ?? 0) !== generation) {
       // A removePluginUserData / clearAllPluginUserData ran between
       // schedule and dispatch. Dropping the upsert preserves the delete.
-      return;
+      throw new Error('Plugin data save cancelled by removal');
+    }
+    // Remote application defers local actions before incrementing the durable
+    // write counter. Reject instead of acknowledging an uncounted memory buffer.
+    if (getIsApplyingRemoteOps()) {
+      throw new Error('Plugin data save deferred by sync; retry after sync completes');
     }
     const pluginUserData: PluginUserData = { id: entityId, data: encoded };
     this._store.dispatch(upsertPluginUserData({ pluginUserData }));
@@ -293,6 +330,10 @@ export class PluginUserPersistenceService {
       this._flushTimers.delete(entityId);
     }
     this._pendingData.delete(entityId);
+    this._pendingResults
+      .get(entityId)
+      ?.reject(new Error('Plugin data save cancelled by removal'));
+    this._pendingResults.delete(entityId);
     this._committing.delete(entityId);
     this._commitGeneration.set(entityId, (this._commitGeneration.get(entityId) ?? 0) + 1);
   }
