@@ -32,6 +32,35 @@ function api() {
     },
   };
 }
+test('propuestas nativas pasan por operaciones compartidas del anfitrión', async () => {
+  const a = api(),
+    requests = [];
+  a.plannerOperation = async (action, params) => {
+    requests.push({ action, params });
+    return { status: 'applied' };
+  };
+  const adapter = createAdapter(a);
+  await adapter.prepare({ from: '2027-02-01', to: '2027-02-07' });
+  await adapter.apply({
+    operationId: 'operation-example-001',
+    proposalId: 'proposal-example',
+    selection: ['block-example'],
+  });
+  assert.deepEqual(
+    requests.map((r) => r.action),
+    ['prepare', 'apply'],
+  );
+});
+test('consulta de recibo no vuelve a guardar el perfil', async () => {
+  const a = api(),
+    adapter = createAdapter(a);
+  const result = await adapter.operationStatus({
+    action: 'edit',
+    operationId: 'operation-example-001',
+  });
+  assert.equal(result.status, 'not_found');
+  assert.equal(result.retrySafe, false);
+});
 test('persistencia usa string y carga al crear nuevo panel', async () => {
   const a = api(),
     first = createAdapter(a);

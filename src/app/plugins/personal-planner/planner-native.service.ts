@@ -9,7 +9,9 @@ import {
   effectiveArea,
 } from '../../../../packages/personal-planner-core/metrics.mjs';
 import { TaskService } from '../../features/tasks/task.service';
+import { ArchiveStoreService } from '../../op-log/persistence/archive-store.service';
 import { TaskMoveToProjectService } from '../../features/tasks/task-move-to-project.service';
+import { PlannerActions } from '../../features/planner/store/planner.actions';
 import { Task, TaskState } from '../../features/tasks/task.model';
 import { selectTaskFeatureState } from '../../features/tasks/store/task.selectors';
 import { TaskSharedActions } from '../../root-store/meta/task-shared.actions';
@@ -35,9 +37,9 @@ const ensure = (ok: unknown, message: string): void => {
 @Injectable({ providedIn: 'root' })
 export class PlannerNativeService {
   private readonly _store = inject(Store);
+  private readonly _root = this._store.selectSignal((state) => state);
   private readonly _tasks = this._store.selectSignal(selectTaskFeatureState);
   private readonly _taskService = inject(TaskService);
-  private readonly _move = inject(TaskMoveToProjectService);
   private readonly _projects = inject(ProjectService);
   private readonly _tags = inject(TagService);
   private readonly _date = inject(DateService);
@@ -73,9 +75,15 @@ export class PlannerNativeService {
     ensure(
       Object.keys(fields).length &&
         Object.keys(fields).every((key) =>
-          ['title', 'isDone', 'timeEstimate', 'projectId', 'tagIds', 'dueDay'].includes(
-            key,
-          ),
+          [
+            'title',
+            'isDone',
+            'timeEstimate',
+            'projectId',
+            'tagIds',
+            'dueDay',
+            'dueWithTime',
+          ].includes(key),
         ),
       'Campo de tarea no soportado.',
     );
@@ -117,6 +125,12 @@ export class PlannerNativeService {
           ),
         'Etiqueta no disponible.',
       );
+    ensure(
+      !(Object.hasOwn(fields, 'dueDay') && Object.hasOwn(fields, 'dueWithTime')),
+      'Indica fecha o fecha y hora, nunca ambas.',
+    );
+    if ('dueWithTime' in fields && fields['dueWithTime'] !== null)
+      ensure(this._timestamp(fields['dueWithTime']), 'Fecha y hora inválidas.');
     if ('dueDay' in fields && fields['dueDay'] !== null) {
       const value = fields['dueDay'];
       ensure(
@@ -134,10 +148,13 @@ export class PlannerNativeService {
     action: string,
     args: Record<string, unknown>,
     profile: PlannerProfile,
+    authorize?: () => Promise<void>,
   ): Promise<Record<string, unknown>> {
-    await this._access.authorize(action);
+    const check = authorize ?? (() => this._access.authorize(action));
+    await check();
     this._ready();
-    if (action === 'log_time') return this._logTime(args, profile);
+    if (action === 'log_time') return this._logTime(args, profile, check);
+    if (action === 'schedule') return this._schedule(args, check);
     ensure(action === 'task', 'Acción nativa no soportada.');
     const fields = this._fields(args['fields']);
     const original =
@@ -152,26 +169,36 @@ export class PlannerNativeService {
         'INVALID_ARGUMENTS',
         'Mueve la tarea superior para cambiar de proyecto.',
       );
+    ensure(
+      args['moveScope'] === undefined ||
+        ['occurrence', 'series'].includes(args['moveScope'] as string),
+      'Alcance de movimiento inválido.',
+    );
     if (
       original?.repeatCfgId &&
       fields.projectId &&
       fields.projectId !== original.projectId
-    )
-      throw new PlannerError(
-        'UNSUPPORTED_OPERATION',
-        'La serie recurrente debe modificarse desde la interfaz; MCP no dispone de alcance fechado para mover una serie.',
+    ) {
+      ensure(args['moveScope'], 'Elige explícitamente una ocurrencia o la serie.');
+    }
+    if (args['moveScope'] === 'series')
+      ensure(
+        original?.repeatCfgId &&
+          fields.projectId &&
+          fields.projectId !== original.projectId,
+        'El alcance serie requiere un cambio de proyecto de una tarea recurrente.',
       );
-    if (original?.dueWithTime && Object.hasOwn(fields, 'dueDay'))
-      throw new PlannerError(
-        'UNSUPPORTED_OPERATION',
-        'Las tareas con hora deben reprogramarse desde el calendario nativo; cambiar solo la fecha sin hora no modifica su horario.',
-      );
-    await this._access.authorize(action);
+    const schedule =
+      Object.hasOwn(fields, 'dueDay') || Object.hasOwn(fields, 'dueWithTime');
+    if (typeof fields.dueWithTime === 'number')
+      this._reminder(original, fields.dueWithTime);
+    await check();
     this._ready();
     this._fields(args['fields']);
     if (original && this._task(original.id) !== original)
       throw new PlannerError('STALE_DATA', 'La tarea cambió; revisa antes de guardar.');
     let taskId: string;
+    let nativeTransitionStarted = false;
     // From the first native dispatch onwards the outcome is uncertain on error.
     // The durable pending journal prevents retries from running these actions twice.
     try {
@@ -180,7 +207,11 @@ export class PlannerNativeService {
         const task = this._taskService.createNewTaskWithDefaults({
           title: fields.title!,
           additional: {
-            ...fields,
+            ...Object.fromEntries(
+              Object.entries(fields).filter(
+                ([key]) => !['dueDay', 'dueWithTime'].includes(key),
+              ),
+            ),
             timeEstimate:
               fields.timeEstimate ??
               this._config.cfg()?.timeTracking.defaultEstimate ??
@@ -190,6 +221,7 @@ export class PlannerNativeService {
           workContextId: projectId,
         });
         taskId = task.id;
+        nativeTransitionStarted = true;
         this._store.dispatch(
           TaskSharedActions.addTask({
             task,
@@ -203,17 +235,48 @@ export class PlannerNativeService {
       } else {
         taskId = original.id;
         const { projectId, ...updates } = fields;
+        delete updates.dueDay;
+        delete updates.dueWithTime;
         if (projectId && projectId !== original.projectId) {
           const state = this._tasks();
           const subTasks = original.subTaskIds
             .map((id) => state.entities[id])
             .filter((t): t is Task => !!t);
-          await this._move.moveToProject({ ...original, subTasks }, projectId, {
-            isSkipConfirm: true,
-          });
+          if (args['moveScope'] === 'series') {
+            const archiveStore = this._injector.get(ArchiveStoreService);
+            const root = this._root(),
+              version = archiveStore.mutationVersion;
+            const guard = (): void => {
+              this._ready();
+              if (
+                this._root() !== root ||
+                archiveStore.mutationVersion !== version ||
+                archiveStore.mutationPending
+              )
+                throw new PlannerError('STALE_DATA', 'La serie cambió antes de moverla.');
+            };
+            guard();
+            await this._injector
+              .get(TaskMoveToProjectService)
+              .moveToProject({ ...original, subTasks }, projectId, {
+                isSkipConfirm: true,
+                beforeMove: async (hasRepeatConfig) => {
+                  ensure(hasRepeatConfig, 'La configuración recurrente ya no existe.');
+                  await check();
+                },
+                atMove: () => {
+                  guard();
+                  nativeTransitionStarted = true;
+                },
+              });
+          } else {
+            nativeTransitionStarted = true;
+            this._taskService.moveToProject({ ...original, subTasks }, projectId);
+          }
         }
         if (original.isDone && updates.isDone === true) delete updates.isDone;
         if (Object.keys(updates).length) {
+          nativeTransitionStarted = true;
           // The native REST path uses this same title-only exception. Mixed
           // updates do not trigger short syntax and retain TaskService invariants.
           if (Object.keys(updates).length === 1 && Object.hasOwn(updates, 'title')) {
@@ -228,9 +291,21 @@ export class PlannerNativeService {
           }
         }
       }
+      if (schedule) {
+        const task = this._task(taskId);
+        nativeTransitionStarted = true;
+        this._dispatchSchedule(task, fields);
+      }
       await flushPluginWrites(this._injector);
       return { status: 'applied', taskId };
-    } catch {
+    } catch (error) {
+      if (!nativeTransitionStarted) {
+        if (error instanceof PlannerError) throw error;
+        throw new PlannerError(
+          'DATA_UNAVAILABLE',
+          'No se pudieron comprobar los datos antes de modificar la tarea.',
+        );
+      }
       return {
         status: 'uncertain',
         code: 'OUTCOME_UNKNOWN',
@@ -240,10 +315,124 @@ export class PlannerNativeService {
     }
   }
 
-  private async _logTime(
+  private _timestamp(value: unknown): value is number {
+    return (
+      typeof value === 'number' &&
+      Number.isSafeInteger(value) &&
+      value > 0 &&
+      !Number.isNaN(new Date(value).getTime())
+    );
+  }
+
+  private _reminder(task: Task | undefined, dueWithTime: number): number | undefined {
+    if (typeof task?.remindAt !== 'number' || typeof task.dueWithTime !== 'number')
+      return undefined;
+    const reminder = dueWithTime - (task.dueWithTime - task.remindAt);
+    ensure(this._timestamp(reminder), 'El recordatorio resultante no es válido.');
+    return reminder;
+  }
+
+  private _dispatchSchedule(task: Task, fields: Partial<Task>): void {
+    if (fields.dueDay === null || fields.dueWithTime === null) {
+      this._store.dispatch(
+        TaskSharedActions.unscheduleTask({ id: task.id, isSkipToast: true }),
+      );
+    } else if (typeof fields.dueDay === 'string') {
+      this._store.dispatch(
+        PlannerActions.planTaskForDay({ task, day: fields.dueDay, isShowSnack: false }),
+      );
+    } else if (typeof fields.dueWithTime === 'number') {
+      const props = {
+        task,
+        dueWithTime: fields.dueWithTime,
+        remindAt: this._reminder(task, fields.dueWithTime),
+        isMoveToBacklog: false,
+      };
+      this._store.dispatch(
+        task.dueWithTime
+          ? TaskSharedActions.reScheduleTaskWithTime(props)
+          : TaskSharedActions.scheduleTaskWithTime(props),
+      );
+    }
+  }
+
+  private async _schedule(
     args: Record<string, unknown>,
-    profile: PlannerProfile,
+    authorize: () => Promise<void>,
   ): Promise<Record<string, unknown>> {
+    ensure(
+      Array.isArray(args['entries']) &&
+        args['entries'].length > 0 &&
+        args['entries'].length <= 500,
+      'Propuesta de calendario inválida.',
+    );
+    const entries = args['entries'] as Array<Record<string, unknown>>;
+    const keys = ['dueDay', 'dueWithTime', 'remindAt', 'timeEstimate', 'timeSpent'];
+    const seen = new Set<string>();
+    const validate = (): Task[] =>
+      entries.map((entry) => {
+        ensure(
+          object(entry) &&
+            this._timestamp(entry['dueWithTime']) &&
+            object(entry['expected']),
+          'Entrada de calendario inválida.',
+        );
+        const task = this._task(entry['taskId']);
+        ensure(
+          !task.subTaskIds.length && !task.isDone,
+          'Solo pueden programarse tareas pendientes sin subtareas.',
+        );
+        const expected = entry['expected'] as Record<string, unknown>;
+        ensure(
+          Object.keys(expected).length === keys.length &&
+            keys.every((key) => Object.hasOwn(expected, key)),
+          'Instantánea de tarea incompleta.',
+        );
+        if (
+          !keys.every((key) =>
+            Object.is((task as unknown as Record<string, unknown>)[key], expected[key]),
+          )
+        )
+          throw new PlannerError('STALE_DATA', 'La tarea cambió desde la propuesta.');
+        this._reminder(task, entry['dueWithTime'] as number);
+        return task;
+      });
+    const tasks = validate();
+    for (const task of tasks) {
+      ensure(!seen.has(task.id), 'Tarea duplicada en la propuesta.');
+      seen.add(task.id);
+    }
+    ensure(
+      args['assertCurrent'] === undefined || typeof args['assertCurrent'] === 'function',
+      'Contexto de propuesta inválido.',
+    );
+    await authorize();
+    this._ready();
+    const current = validate();
+    if (current.some((task, index) => task !== tasks[index]))
+      throw new PlannerError('STALE_DATA', 'La tarea cambió antes de aplicar.');
+    (args['assertCurrent'] as (() => void) | undefined)?.();
+    const taskIds = tasks.map((task) => task.id);
+    try {
+      tasks.forEach((task, index) =>
+        this._dispatchSchedule(task, {
+          dueWithTime: entries[index]['dueWithTime'] as number,
+        }),
+      );
+      await flushPluginWrites(this._injector);
+      return { status: 'applied', taskIds };
+    } catch {
+      return {
+        status: 'uncertain',
+        code: 'OUTCOME_UNKNOWN',
+        taskIds,
+        message:
+          'El calendario puede haberse modificado. Comprueba la aplicación y consulta el recibo; no repitas con otro operationId.',
+      };
+    }
+  }
+
+  private _civilDays(profile: PlannerProfile): void {
     const misc = this._config.cfg()?.misc;
     const boundary =
       misc?.startOfNextDayTime ??
@@ -255,6 +444,14 @@ export class PlannerNativeService {
         boundary === '00:00',
       'La zona del dispositivo y del perfil deben coincidir y el inicio del día lógico debe ser 00:00 para registrar por fecha civil.',
     );
+  }
+
+  private async _logTime(
+    args: Record<string, unknown>,
+    profile: PlannerProfile,
+    authorize: () => Promise<void>,
+  ): Promise<Record<string, unknown>> {
+    this._civilDays(profile);
     const task = this._task(args['taskId']);
     ensure(
       !task.subTaskIds?.length,
@@ -281,13 +478,15 @@ export class PlannerNativeService {
       snapshot.matches(snapshot.byId.get(task.id)!, effective),
       'La tarea no está asociada a esa actividad.',
     );
-    await this._access.authorize('log_time');
+    await authorize();
     this._ready();
+    this._civilDays(profile);
     if (this._task(task.id) !== task)
       throw new PlannerError(
         'STALE_DATA',
         'La tarea cambió antes de registrar el tiempo.',
       );
+    (args['assertCurrent'] as (() => void) | undefined)?.();
     try {
       this._taskService.addTimeSpentAndSync(task, parsed.duration, parsed.date);
       await flushPluginWrites(this._injector);

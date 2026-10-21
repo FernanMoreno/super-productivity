@@ -77,6 +77,7 @@ async function launch() {
     args: [
       ...(process.argv[2] ? [] : [process.env.SP_SMOKE_APP_DIR || '.']),
       `--user-data-dir=${profile}`,
+      '--no-protocol-registration',
       '--no-sandbox',
       '--disable-gpu',
     ],
@@ -124,7 +125,7 @@ async function launch() {
       .toContain('planner_activities');
     assert.deepEqual(
       (await rpc('tools/list', {})).body.result.tools.map((t) => t.name),
-      ['get_status', 'planner_activities'],
+      ['get_status', 'planner_operation_status', 'planner_activities'],
     );
     const denied = await rpc('tools/call', {
       name: 'planner_task',
@@ -219,6 +220,35 @@ async function launch() {
       .structuredContent;
     assert.equal(query.days[0].progress[0].dailyMinutes, 1);
     assert.equal(query.days[0].tasks.filter((t) => t.id === id).length, 1);
+    const receipt = (
+      await call('planner_operation_status', {
+        action: 'log_time',
+        operationId: timeRequest.operationId,
+      })
+    ).structuredContent;
+    assert.equal(receipt.status, 'applied');
+    assert.equal(receipt.result.durationMs, 60000);
+    const exactTime = Date.parse(today + 'T12:00:00Z');
+    assert.equal(
+      (
+        await call('planner_task', {
+          operationId: 'native-time-smoke',
+          taskId: id,
+          fields: { dueWithTime: exactTime },
+        })
+      ).structuredContent.status,
+      'applied',
+    );
+    assert.equal(
+      (
+        await call('planner_task', {
+          operationId: 'native-day-smoke',
+          taskId: id,
+          fields: { dueDay: today },
+        })
+      ).structuredContent.status,
+      'applied',
+    );
 
     // Real plugin ZIP import and real iframe bridge on this Electron profile.
     await page.evaluate(() => {
@@ -309,6 +339,54 @@ async function launch() {
       (await call('planner_apply', applyRequest)).structuredContent.replayed,
       true,
     );
+    // Native task alternatives use the same reviewed host operations as the iframe.
+    await call('planner_task', {
+      operationId: 'native-planned-day-smoke',
+      taskId: id,
+      fields: { dueDay: from },
+    });
+    const nativePlan = (await call('planner_prepare', { from, to: from }))
+      .structuredContent;
+    const nativeItem = nativePlan.proposals.find(
+      (p) => p.target === 'native-task' && p.taskId === id && p.interval,
+    );
+    assert.ok(nativeItem, 'Expected a native task alternative');
+    const nativeApply = (
+      await call('planner_apply', {
+        operationId: 'native-apply-smoke',
+        proposalId: nativePlan.proposalId,
+        selection: [nativeItem.id],
+      })
+    ).structuredContent;
+    assert.equal(nativeApply.status, 'applied', JSON.stringify(nativeApply));
+    const nativeQuery = (await call('planner_query', { from, to: from }))
+      .structuredContent;
+    assert.equal(
+      nativeQuery.days[0].tasks.find((task) => task.id === id).dueWithTime,
+      nativeItem.interval[0],
+    );
+    // Prepare from the actual iframe bridge; no assistant credential is involved.
+    await frame.locator('[data-action="prepare-shared"]').click();
+    await expect(frame.locator('[data-form="apply-proposal"]')).toBeVisible();
+    assert.equal(
+      await frame.locator('[data-form="apply-proposal"] input:checked').count(),
+      0,
+    );
+    const uiTask = (await call('planner_task', {
+      operationId:'ui-native-create-smoke',
+      fields:{title:'Tarea ficticia desde panel',timeEstimate:900000},
+    })).structuredContent;
+    assert.equal(uiTask.status,'applied');
+    await page.evaluate(() => window.ea.setAssistantAccessEnabled(false));
+    await frame.locator('[data-action="prepare-shared"]').click();
+    const uiAlternative = frame.locator('[data-form="apply-proposal"] li').filter({hasText:'Tarea ficticia desde panel'});
+    await uiAlternative.locator('input[type="checkbox"]').check();
+    await frame.locator('[data-form="apply-proposal"] button').click();
+    await expect(frame.locator('#proposal-review')).toHaveText('Selección aplicada y confirmada por la aplicación.');
+    await page.evaluate(() => window.ea.setAssistantAccessEnabled(true));
+    await waitUntilReady();
+    const uiNativeResult = (await call('planner_query',{from:today,to:from})).structuredContent;
+    assert.ok(uiNativeResult.days.flatMap((day)=>day.tasks).some((task)=>task.id===uiTask.taskId && task.dueWithTime));
     // An official SDK client exercises discovery and a real query without inference.
     if (process.env.PLANNER_MCP_SDK_PATH) {
       const { Client } = require(
@@ -381,6 +459,21 @@ async function launch() {
           client.version +
           '; discovery and planner_query; zero model calls.',
       );
+    }
+    if (process.env.PLANNER_MCP_ADMIN_CLIENTS === '1') {
+      const {
+        verifyClaudeCodeRuntime,
+      } = require('../../tools/mcpb/tests/claude-code-runtime.cjs');
+      const {
+        verifyOpenCodeRuntime,
+      } = require('../../tools/mcpb/tests/opencode-runtime.cjs');
+      for (const verify of [verifyClaudeCodeRuntime, verifyOpenCodeRuntime]) {
+        const client = await verify({ url: endpoint, token: key });
+        assert.equal(client.modelCalls, 0);
+        console.log(
+          'PASS administrative client against real Electron: ' + JSON.stringify(client),
+        );
+      }
     }
     await page.reload();
     await expect

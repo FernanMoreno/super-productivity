@@ -391,7 +391,7 @@ describe('LocalRestApiPlannerRoutesService', () => {
     expect(stored.commitments.length).toBe(0);
   });
 
-  it('rejects moving a recurring task because a single-task command cannot authorize the whole series', async () => {
+  it('requires explicit scope before moving a recurring task', async () => {
     taskState.set({
       ids: ['task-example'],
       entities: {
@@ -410,7 +410,7 @@ describe('LocalRestApiPlannerRoutesService', () => {
       fields: { projectId: 'project-other' },
     });
     expect(result['status']).toBe('rejected');
-    expect(result['code']).toBe('UNSUPPORTED_OPERATION');
+    expect(result['code']).toBe('INVALID_ARGUMENTS');
     expect(TestBed.inject(TaskMoveToProjectService).moveToProject).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -440,7 +440,7 @@ describe('LocalRestApiPlannerRoutesService', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('rejects changing dueDay on a timed task instead of claiming an ineffective schedule change', async () => {
+  it('changes a timed task to a day-only native plan', async () => {
     taskState.set({
       ids: ['task-example'],
       entities: {
@@ -457,10 +457,10 @@ describe('LocalRestApiPlannerRoutesService', () => {
       taskId: 'task-example',
       fields: { dueDay: '2026-11-04' },
     });
-    expect(result['status']).toBe('rejected');
-    expect(result['code']).toBe('UNSUPPORTED_OPERATION');
+    expect(result['status']).toBe('applied');
     expect(TestBed.inject(TaskService).update).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch.calls.mostRecent().args[0].type).toBe('[Planner] Plan Task for Day');
+    expect(dispatch.calls.mostRecent().args[0].day).toBe('2026-11-04');
   });
 
   it('does not confirm a native mutation when durable flushing fails', async () => {

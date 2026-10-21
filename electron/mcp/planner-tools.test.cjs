@@ -19,6 +19,68 @@ const data = { status: 'applied', operationId, revision: 'revision-002' };
 const reply = async () => ({ status: 200, body: { ok: true, data } });
 const names = (scopes) => listGrantedTools(scopes).map((t) => t.name);
 
+test('operation status checks the original action grants before forwarding', async () => {
+  assert(names(grants).includes('planner_operation_status'));
+  let calls = 0;
+  const forward = async (request) => {
+    calls++;
+    assert.equal(request.body.action, 'operation_status');
+    return reply();
+  };
+  const args = { action: 'log_time', operationId };
+  const denied = await runTool(
+    'planner_operation_status',
+    args,
+    () => ['planner:read'],
+    forward,
+  );
+  assert.equal(denied.isError, true);
+  assert.equal(calls, 0);
+  const allowed = await runTool('planner_operation_status', args, () => grants, forward);
+  assert.equal(allowed.isError, undefined);
+  assert.equal(calls, 1);
+});
+
+test('task scheduling accepts exact native times and explicit recurrence scope', async () => {
+  const result = await runTool(
+    'planner_task',
+    {
+      operationId,
+      taskId: 'task-example',
+      moveScope: 'occurrence',
+      fields: { projectId: 'project-example', dueWithTime: 1801472400000 },
+    },
+    () => grants,
+    reply,
+  );
+  assert.equal(result.isError, undefined);
+  const ambiguous = await runTool(
+    'planner_task',
+    {
+      operationId,
+      fields: { dueDay: '2027-02-01', dueWithTime: 1801472400000 },
+    },
+    () => grants,
+    reply,
+  );
+  assert.equal(ambiguous.isError, true);
+});
+
+test('operation status hides receipts when the original write grant is revoked during the read', async () => {
+  let current = grants;
+  const result = await runTool(
+    'planner_operation_status',
+    { action: 'log_time', operationId },
+    () => current,
+    async () => {
+      current = grants.filter((scope) => scope !== 'time:write');
+      return reply();
+    },
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /NOT_PERMITTED/);
+});
+
 test('planner permissions remain separate and each required scope gates discovery', () => {
   for (const scope of grants) assert(ASSISTANT_ACCESS_SCOPES.includes(scope));
   assert.deepEqual(names([]), ['get_status']);

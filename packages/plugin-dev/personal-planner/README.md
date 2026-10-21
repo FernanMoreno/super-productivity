@@ -2,13 +2,13 @@
 
 Plugin general de planificación y seguimiento para Super Productivity. Permite configurar actividades, compromisos, disponibilidad y objetivos que cambian con el tiempo. Empieza vacío; los horarios y nombres pertenecen a los datos del usuario, no a la lógica del producto.
 
-Sin backend, servicios de pago ni dependencias de ejecución. Reutiliza tareas, proyectos, etiquetas, registros y temporizador nativos. La versión 0.3.0 comparte el motor de planificación con el MCP nativo del fork y añade comparación de revisiones al guardado durable. No crea otra fuente de tareas o registros.
+Sin backend, servicios de pago ni dependencias de ejecución. Reutiliza tareas, proyectos, etiquetas, registros y temporizador nativos. La versión 0.4.0 comparte el motor de planificación con el MCP nativo del fork y añade comparación de revisiones al guardado durable. No crea otra fuente de tareas o registros.
 
 ## Instalación
 
-Base comprobada: **Super Productivity 19.2.0**, commit `78139c531c808bab7c46ef96fd0fbb0a3b6f7d6d`. Resultados y límites de validación: [VALIDACION-MCP.md](VALIDACION-MCP.md).
+Base comprobada: **Super Productivity 19.2.0**, commit `78139c531c808bab7c46ef96fd0fbb0a3b6f7d6d`. Resultados actuales: [VALIDACION-LIMITES.md](VALIDACION-LIMITES.md). Validación anterior: [VALIDACION-MCP.md](VALIDACION-MCP.md).
 
-El plugin **0.3.0 requiere este fork con `compareAndSwapSyncedData`**. El número 19.2.0 por sí solo no basta: la publicación original no contiene el MCP nativo de la base de desarrollo inspeccionada. El ZIP añade el panel; las herramientas MCP requieren además el anfitrión Electron compilado con esta adaptación. El paquete web anterior 0.2.0 no contiene esa integración.
+El plugin **0.4.0 requiere este fork con `compareAndSwapSyncedData` y `plannerOperation`**. El número 19.2.0 por sí solo no basta: la publicación original no contiene el MCP nativo de la base de desarrollo inspeccionada. El ZIP añade el panel; las herramientas MCP requieren además el anfitrión Electron compilado con esta adaptación. El paquete web anterior 0.2.0 no contiene esa integración.
 
 Conexión desde Codex, Claude Code, OpenCode y Claude Desktop: [guía de clientes](../../../docs/planner-mcp-clients.md). Herramientas, parámetros, permisos y límites: [contrato MCP](../../../docs/planner-mcp.md). Activa el acceso del asistente y sus permisos en Ajustes de Electron; REST conserva su clave independiente.
 
@@ -60,7 +60,7 @@ Al editar una rutina elige:
 - **Solo una ocurrencia:** indica su fecha original. Se excluye de la serie y se crea un reemplazo puntual; puedes moverlo a otra fecha. También puedes omitir solo esa ocurrencia.
 - **Esta y futuras desde una fecha:** termina la serie anterior el día previo y crea una sucesora. El pasado y las excepciones anteriores se conservan. Puedes cambiar días, horas, final de vigencia y excepciones futuras.
 
-Las fechas excluidas se refieren al día original de inicio, también en bloques nocturnos. Las tareas recurrentes nativas se gestionan en Super Productivity: el plugin reutiliza las instancias ya creadas y no genera otra serie ni duplica registros. La API actual no permite editar series nativas; los bloques propios representan disponibilidad y reservas del panel.
+Las fechas excluidas se refieren al día original de inicio, también en bloques nocturnos. Las tareas recurrentes nativas se gestionan en Super Productivity: el plugin reutiliza las instancias ya creadas y no genera otra serie ni duplica registros. El MCP permite mover una ocurrencia o una serie nativa completa entre proyectos mediante un alcance explícito. Los cambios de rutina con fecha efectiva del panel siguen conservando sus propias vigencias.
 
 ## Panel y propuestas
 
@@ -74,6 +74,10 @@ Las propuestas respetan prioridad, vigencia, fecha límite, días y ventanas con
 
 **Revisar bloque propuesto** abre un formulario. Solo al guardar se reserva un bloque del plugin; no mueve tareas ni modifica el calendario nativo. Añadir o quitar trabajo extra recalcula huecos, carga y tareas afectadas. Con datos de descanso incompletos, los resultados y alternativas siguen siendo parciales.
 
+**Preparar propuesta de la semana** utiliza las operaciones compartidas del anfitrión. Muestra por separado los destinos «Calendario nativo» y «Bloque del planificador», sin seleccionar cambios automáticamente. Marca las alternativas que aceptes y pulsa **Aplicar selección revisada**. Aplica un solo tipo de destino por vez; después de cambiar datos prepara otra propuesta. Una revisión obsoleta se rechaza. El panel puede utilizar estas operaciones con MCP deshabilitado.
+
+Si se pierde conexión o confirmación, conserva el identificador mostrado y utiliza **Consultar una operación tras perder conexión** en Configuración. Un recibo pendiente o inexistente no autoriza repetir con otro identificador; uno final muestra el resultado confirmado sin volver a escribir.
+
 **Actualizar datos** consulta de nuevo las tareas y asociaciones sin borrar formularios pendientes. Reabrir el panel carga la configuración guardada. Guarda cada formulario antes de editar otro; el guardado reconstruye la configuración visible.
 
 ## Persistencia, migración y privacidad
@@ -86,10 +90,9 @@ El ZIP incluye solo manifiesto, interfaz, licencia y créditos. Nunca incluye pe
 
 Límites verificados:
 
-- `loadSyncedData()` y la lectura del archivo pueden ocultar fallos internos devolviendo el mismo valor que una instalación vacía. El plugin no puede distinguir esos casos si el anfitrión no expone el error; conserva exportaciones privadas.
-- `getArchivedTasks()` puede devolver `[]` cuando falla internamente el archivo. El plugin advierte que no puede certificar un histórico completo. Si el error sí llega al bridge, muestra métricas incompletas explícitamente.
+- Las lecturas del perfil y del archivo propagan los errores del anfitrión. Un dato comprimido corrupto no se presenta como perfil vacío; un archivo inaccesible produce métricas incompletas y un aviso.
 - `timeSpentOnDay` contiene agregados por día lógico, sin sesiones originales. Para certificar objetivos por día civil deben coincidir zona del dispositivo y del perfil, con inicio de día del anfitrión a 00:00. Cambiar ajustes no reconstruye registros antiguos.
-- No se proyectan repeticiones nativas futuras aún no creadas ni se importan automáticamente calendarios externos. La API de recurrencias nativas es de lectura.
+- No se proyectan repeticiones nativas futuras aún no creadas ni se importan automáticamente calendarios externos. El cambio de proyecto de una serie se ofrece con alcance explícito; el panel no fabrica instancias futuras.
 - Una tarea puede pertenecer a varias actividades no relacionadas. El panel avisa; sus métricas no se deben sumar entre sí. La carga asigna cada tarea una sola vez.
 - Objetivos semanales y acumulados se muestran como métricas; el buscador propone objetivos diarios y estimaciones flexibles, sin optimizador global ni modificaciones silenciosas.
 

@@ -33,6 +33,9 @@ export function createAdapter(api) {
     },
   });
   const adapter = {
+    prepare: (params) => call('plannerOperation', ['prepare', params]),
+    apply: (params) => call('plannerOperation', ['apply', params]),
+    operationStatus: (params) => operations.operationStatus(params),
     async loadState() {
       try {
         const state = await operations.activities();
@@ -69,7 +72,7 @@ export function createAdapter(api) {
           ? 'La configuración cambió fuera de este formulario. Conserva tus cambios y carga la configuración actual antes de volver a guardarlos.'
           : result.message ||
             'No se pudo guardar con confirmación durable. Conserva el formulario y el identificador de operación; no repitas la modificación con otro identificador.';
-      const error = Object.assign(new Error(message), {
+      const error = Object.assign(new Error(`${message} Operación: ${operationId}`), {
         code: result.code || 'OUTCOME_UNKNOWN',
         operationId,
         result,
@@ -129,9 +132,6 @@ export function createAdapter(api) {
         warnings.push(
           `Los registros usan días lógicos del anfitrión (${boundary ?? 'inicio desconocido'}, ${browserZone}). No se pueden reconstruir días civiles de la zona configurada sin sesiones originales. Ajusta el anfitrión para registros futuros.`,
         );
-      warnings.push(
-        'Historial: se incluyen archivos devueltos por la API. El anfitrión puede ocultar fallos de lectura del archivo devolviendo una lista vacía; el total histórico no puede certificarse completo.',
-      );
       return {
         ...snapshot,
         projects: value(2, []),

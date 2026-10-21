@@ -99,6 +99,7 @@ for (const method of [
   'getAppState',
   'loadSyncedData',
   'compareAndSwapSyncedData',
+  'plannerOperation',
   'selectTask',
 ]) {
   assert.ok(types.includes(`${method}(`), `Método ausente en API: ${method}`);

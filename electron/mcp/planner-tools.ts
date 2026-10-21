@@ -105,8 +105,13 @@ const editError = (args: Record<string, unknown>): string | undefined => {
   return undefined;
 };
 const taskError = (args: Record<string, unknown>): string | undefined => {
-  const extra = unknown(args, ['operationId', 'taskId', 'fields']);
+  const extra = unknown(args, ['operationId', 'taskId', 'fields', 'moveScope']);
   if (extra) return extra;
+  if (
+    args.moveScope !== undefined &&
+    !['occurrence', 'series'].includes(String(args.moveScope))
+  )
+    return 'moveScope must be occurrence or series';
   if (
     !validOperation(args.operationId) ||
     (args.taskId !== undefined && !validId(args.taskId))
@@ -116,7 +121,15 @@ const taskError = (args: Record<string, unknown>): string | undefined => {
   if (
     !isRecord(f) ||
     !Object.keys(f).length ||
-    unknown(f, ['title', 'isDone', 'timeEstimate', 'projectId', 'tagIds', 'dueDay'])
+    unknown(f, [
+      'title',
+      'isDone',
+      'timeEstimate',
+      'projectId',
+      'tagIds',
+      'dueDay',
+      'dueWithTime',
+    ])
   )
     return 'fields must contain supported native task fields';
   if (
@@ -147,6 +160,17 @@ const taskError = (args: Record<string, unknown>): string | undefined => {
     return 'tagIds must contain at most 200 distinct native tag ids; TODAY is virtual';
   if (f.dueDay !== undefined && f.dueDay !== null && !validDay(f.dueDay))
     return 'dueDay must be a calendar day or null';
+  if (f.dueDay !== undefined && f.dueWithTime !== undefined)
+    return 'Choose dueDay or dueWithTime in one operation';
+  if (
+    f.dueWithTime !== undefined &&
+    f.dueWithTime !== null &&
+    (typeof f.dueWithTime !== 'number' ||
+      !Number.isSafeInteger(f.dueWithTime) ||
+      f.dueWithTime < 1 ||
+      f.dueWithTime > 8640000000000000)
+  )
+    return 'dueWithTime must be a valid positive epoch millisecond timestamp or null';
   return undefined;
 };
 const timeError = (args: Record<string, unknown>): string | undefined => {
@@ -191,7 +215,15 @@ const applyError = (args: Record<string, unknown>): string | undefined => {
 };
 
 interface PlannerToolOptions {
-  action: 'activities' | 'query' | 'edit' | 'task' | 'log_time' | 'prepare' | 'apply';
+  action:
+    | 'activities'
+    | 'query'
+    | 'edit'
+    | 'task'
+    | 'log_time'
+    | 'prepare'
+    | 'apply'
+    | 'operation_status';
   requiredScopes: readonly AssistantAccessScope[];
   mutates?: boolean;
   description: string;
@@ -221,6 +253,11 @@ const plannerTool = (options: PlannerToolOptions): ToolSpec => ({
     const grantedScopes = [...getScopes()];
     if (!options.requiredScopes.every((scope) => grantedScopes.includes(scope)))
       return fail('NOT_PERMITTED', 'This connection may not use this tool.');
+    if (options.action === 'operation_status') {
+      const required = RECEIPT_SCOPES[String(args.action)];
+      if (!required?.every((scope) => grantedScopes.includes(scope)))
+        return fail('NOT_PERMITTED', 'The original operation permissions are required.');
+    }
     let reply;
     try {
       reply = await forward({
@@ -238,6 +275,11 @@ const plannerTool = (options: PlannerToolOptions): ToolSpec => ({
           )
         : fail('APP_UNAVAILABLE', 'Super Productivity could not handle the request.');
     }
+    if (
+      options.action === 'operation_status' &&
+      !RECEIPT_SCOPES[String(args.action)]?.every((scope) => getScopes().includes(scope))
+    )
+      return fail('NOT_PERMITTED', 'The original operation permissions were revoked.');
     if (!reply.body.ok) return failFromRenderer(reply);
     if (!isRecord(reply.body.data))
       return fail('INTERNAL_ERROR', 'The planner returned an invalid result.');
@@ -251,7 +293,30 @@ const plannerTool = (options: PlannerToolOptions): ToolSpec => ({
     return ok(reply.body.data);
   },
 });
+const RECEIPT_SCOPES: Record<string, readonly AssistantAccessScope[]> = {
+  edit: ['planner:read', 'planner:write'],
+  task: ['tasks:read', 'tasks:write'],
+  log_time: [...QUERY_SCOPES, 'time:write'],
+  apply: [...QUERY_SCOPES, 'planner:write'],
+};
 export const PLANNER_TOOLS: ToolSpec[] = [
+  plannerTool({
+    action: 'operation_status',
+    requiredScopes: ['planner:read'],
+    description:
+      'Reads a durable receipt by operationId without retrying a mutation. Requires permissions for the original action. Pending or absent receipts do not prove that a change was not applied.',
+    properties: {
+      operationId: operationSchema,
+      action: { type: 'string', enum: ['edit', 'task', 'log_time', 'apply'] },
+    },
+    required: ['operationId', 'action'],
+    validate: (args) =>
+      unknown(args, ['action', 'operationId']) ||
+      (!validOperation(args.operationId) ||
+      !Object.hasOwn(RECEIPT_SCOPES, String(args.action))
+        ? 'A valid operationId and original mutation action are required'
+        : undefined),
+  }),
   plannerTool({
     action: 'activities',
     requiredScopes: ['planner:read'],
@@ -300,6 +365,7 @@ export const PLANNER_TOOLS: ToolSpec[] = [
     properties: {
       operationId: operationSchema,
       taskId: idSchema,
+      moveScope: { type: 'string', enum: ['occurrence', 'series'] },
       fields: {
         type: 'object',
         properties: {
@@ -309,6 +375,12 @@ export const PLANNER_TOOLS: ToolSpec[] = [
           projectId: idSchema,
           tagIds: { type: 'array', items: idSchema, maxItems: 200, uniqueItems: true },
           dueDay: { anyOf: [dateSchema, { type: 'null' }] },
+          dueWithTime: {
+            anyOf: [
+              { type: 'integer', minimum: 1, maximum: 8640000000000000 },
+              { type: 'null' },
+            ],
+          },
         },
         additionalProperties: false,
         minProperties: 1,

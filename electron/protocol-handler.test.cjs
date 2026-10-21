@@ -375,3 +375,31 @@ test('cold-start toggle-visibility shows the launched window instead of toggling
   assert.equal(showOrFocusCalls[0], win);
   assert.deepEqual(win.sent, []);
 });
+
+test('no-protocol-registration skips registration while retaining incoming URL handling', () => {
+  const { initializeProtocolHandling } = loadModule();
+  const win = makeWin();
+  const app = makeFakeApp();
+  let registrations = 0;
+  app.setAsDefaultProtocolClient = () => registrations++;
+  const originalArgv = process.argv;
+  try {
+    process.argv = ['/path/to/app', '--no-protocol-registration'];
+    initializeProtocolHandling(false, app, () => win);
+  } finally {
+    process.argv = originalArgv;
+  }
+  assert.equal(registrations, 0);
+  assert.equal(typeof app.handlers['open-url'], 'function');
+  app.handlers['second-instance']({}, ['/path/to/app', 'superproductivity://add-task']);
+  assert.deepEqual(win.sent, [{ channel: 'SHOW_ADD_TASK_BAR', payload: undefined }]);
+});
+
+test('normal launches continue registering the protocol', () => {
+  const { initializeProtocolHandling } = loadModule();
+  const app = makeFakeApp();
+  let registrations = 0;
+  app.setAsDefaultProtocolClient = () => registrations++;
+  initializeProtocolHandling(false, app, () => makeWin());
+  assert.equal(registrations, 1);
+});

@@ -1,3 +1,4 @@
+import { PlannerOperationsService } from './personal-planner/planner-operations.service';
 import {
   persistPluginDataSynced,
   compareAndSwapPluginData,
@@ -235,14 +236,15 @@ export class PluginBridgeService implements OnDestroy {
     this._initWindowFocusTracking();
   }
 
-  /**
-   * Create bound methods for a specific plugin
-   * This ensures each plugin has its own set of methods with the pluginId already bound
-   */
+  /** Create methods bound to the calling plugin identity. */
   createBoundMethods(
     pluginId: string,
     manifest?: PluginManifest,
   ): {
+    plannerOperation: (
+      action: string,
+      params: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
     compareAndSwapSyncedData: (
       expected: string | null,
       dataStr: string,
@@ -306,6 +308,8 @@ export class PluginBridgeService implements OnDestroy {
     log: ReturnType<typeof Log.withContext>;
   } {
     return {
+      plannerOperation: (action, params) =>
+        this._injector.get(PlannerOperationsService).runPlugin(pluginId, action, params),
       // Data persistence
       compareAndSwapSyncedData: (expected, dataStr, key) =>
         compareAndSwapPluginData(
@@ -778,26 +782,13 @@ export class PluginBridgeService implements OnDestroy {
    * Get archived tasks
    */
   async getArchivedTasks(): Promise<TaskCopy[]> {
-    try {
-      const taskArchive = await this._taskArchiveService.load();
-
-      // Convert the archive format to TaskCopy array
-      const archivedTasks: TaskCopy[] = taskArchive.ids.map((id) => {
-        const task = taskArchive.entities[id];
-        if (!task) {
-          throw new Error(`Archived task with id ${id} not found in entities`);
-        }
-        return task as TaskCopy;
-      });
-
-      PluginLog.log('PluginBridge: Retrieved archived tasks', {
-        count: archivedTasks.length,
-      });
-      return archivedTasks;
-    } catch (error) {
-      PluginLog.err('PluginBridge: Failed to load archived tasks:', error);
-      return [];
-    }
+    const taskArchive = await this._taskArchiveService.load();
+    // A failed read must remain distinguishable from a genuinely empty archive.
+    return taskArchive.ids.map((id) => {
+      const task = taskArchive.entities[id];
+      if (!task) throw new Error('Archived task data is incomplete');
+      return task as TaskCopy;
+    });
   }
 
   /**
@@ -1408,12 +1399,7 @@ export class PluginBridgeService implements OnDestroy {
   ): Promise<string | null> {
     assertPluginPersistenceKey(key);
     const entityId = composeId(pluginId, key);
-    try {
-      return await this._pluginUserPersistenceService.loadPluginUserData(entityId);
-    } catch (error) {
-      PluginLog.err('PluginBridge: Failed to get persisted plugin data:', error);
-      return null;
-    }
+    return this._pluginUserPersistenceService.loadPluginUserData(entityId);
   }
 
   /**
@@ -2330,9 +2316,7 @@ export class PluginBridgeService implements OnDestroy {
     return this.updateSimpleCounter(id, { countOnDay: newCountOnDay });
   }
 
-  /**
-   * Clean up all resources when service is destroyed
-   */
+  /** Clean up resources when the service is destroyed. */
   ngOnDestroy(): void {
     PluginLog.log('PluginBridgeService: Cleaning up resources');
     this._cleanupWindowFocusTracking();

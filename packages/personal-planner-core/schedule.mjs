@@ -87,7 +87,7 @@ function intersect(a, b) {
     b.map(([x, y]) => [Math.max(s, x), Math.min(e, y)]).filter(([x, y]) => y > x),
   );
 }
-function subtract(a, b) {
+export function subtract(a, b) {
   let out = union(a);
   for (const [s, e] of union(b))
     out = out.flatMap(([x, y]) =>
@@ -260,7 +260,7 @@ function timedIntervals(snapshot) {
     return from ? [[from, from + remainingTask(t) * 60000]] : [];
   });
 }
-function restricted(free, area, day, zone) {
+export function restricted(free, area, day, zone) {
   if (
     !active(area, day) ||
     (area.allowedWeekdays &&

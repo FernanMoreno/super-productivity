@@ -36,6 +36,7 @@ import {
   settingsHTML,
   eventForm,
   deadlineForm,
+  proposalReviewHTML,
 } from './forms.mjs';
 const $ = (id) => document.getElementById(id);
 let profile,
@@ -51,6 +52,9 @@ let profile,
   refreshTimer,
   externalRefreshPending = false,
   nativeRefreshPending = false;
+let sharedProposal, proposalOperationId;
+let proposalOutcomeUnknown = false;
+let proposalBusy = false;
 const date = () => $('day').value || localDay(Date.now(), profile?.timezone);
 const minutes = (n) => (n === null ? 'No calculable' : `${Math.round(n)} min`);
 const clock = (epoch) =>
@@ -403,6 +407,91 @@ document.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const f = new FormData(form);
+    if (form.dataset.form === 'operation-status') {
+      const result = await adapter.operationStatus({
+        action: String(f.get('action')),
+        operationId: String(f.get('operationId')).trim(),
+      });
+      const labels = {
+        applied: 'Cambio confirmado por la aplicación.',
+        rejected: 'Operación rechazada.',
+        conflict: 'Operación rechazada por cambios posteriores.',
+        uncertain:
+          'Resultado incierto: el recibo no confirma el cambio. No repitas con otro identificador.',
+        not_found:
+          'No existe recibo. Su ausencia no demuestra que sea seguro repetir el cambio.',
+      };
+      $('operation-result').textContent =
+        `${labels[result.status] || 'No se pudo confirmar el estado.'} ${result.code || ''}`;
+      if (
+        String(f.get('operationId')).trim() === proposalOperationId &&
+        ['applied', 'rejected', 'conflict'].includes(result.status)
+      ) {
+        proposalOutcomeUnknown = false;
+        sharedProposal = null;
+        proposalOperationId = null;
+        $('proposal-review').textContent = labels[result.status];
+        await refresh();
+      }
+      return;
+    }
+    if (form.dataset.form === 'apply-proposal') {
+      if (proposalBusy) return;
+      if (!sharedProposal) throw Error('Prepara una propuesta antes de aplicar.');
+      if (proposalOutcomeUnknown)
+        throw Error('Consulta el recibo pendiente antes de repetir cambios.');
+      const selection = f.getAll('selection').map(String);
+      if (!selection.length) throw Error('Selecciona los cambios revisados.');
+      proposalBusy = true;
+      const controls = [...form.querySelectorAll('input,button')];
+      controls.forEach((control) => (control.disabled = true));
+      try {
+        proposalOperationId ||= crypto.randomUUID();
+        let result;
+        try {
+          result = await adapter.apply({
+            operationId: proposalOperationId,
+            proposalId: sharedProposal.proposalId,
+            selection,
+          });
+        } catch {
+          result = {
+            status: 'uncertain',
+            code: 'OUTCOME_UNKNOWN',
+            message:
+              'Se perdió la conexión antes de recibir confirmación. Consulta el recibo.',
+          };
+        }
+        if (result.status !== 'applied') {
+          const operationId = proposalOperationId;
+          if (['rejected', 'conflict'].includes(result.status))
+            proposalOperationId = null;
+          else {
+            proposalOutcomeUnknown = true;
+            form
+              .querySelectorAll('input,button')
+              .forEach((control) => (control.disabled = true));
+            const receipt = document.querySelector('[data-form="operation-status"]');
+            receipt.elements.namedItem('action').value = 'apply';
+            receipt.elements.namedItem('operationId').value = operationId;
+          }
+          throw Error(
+            `${result.message || result.code || 'No se ha confirmado el cambio.'} Operación: ${operationId}`,
+          );
+        }
+        sharedProposal = null;
+        proposalOperationId = null;
+        proposalOutcomeUnknown = false;
+        $('proposal-review').textContent =
+          'Selección aplicada y confirmada por la aplicación.';
+        await refresh();
+        return;
+      } finally {
+        proposalBusy = false;
+        if (!proposalOutcomeUnknown)
+          controls.forEach((control) => (control.disabled = false));
+      }
+    }
     let p = structuredClone(profile);
     const get = (k) => String(f.get(k) || '').trim(),
       num = (k) => (get(k) === '' ? null : Number(get(k)));
@@ -523,6 +612,27 @@ document.addEventListener('click', async (event) => {
   if (!b) return;
   try {
     const { action, id } = b.dataset;
+    if (action === 'prepare-shared') {
+      if (proposalBusy) return;
+      if (proposalOutcomeUnknown)
+        throw Error(
+          'Hay una aplicación pendiente de confirmar. Consulta su recibo antes de preparar otra.',
+        );
+      proposalBusy = true;
+      try {
+        const week = days();
+        sharedProposal = await adapter.prepare({
+          from: week[0],
+          to: week[week.length - 1],
+        });
+        proposalOperationId = null;
+        $('proposal-review').innerHTML = proposalReviewHTML(sharedProposal, clock);
+        $('proposal-review').querySelector('input,button')?.focus();
+        return;
+      } finally {
+        proposalBusy = false;
+      }
+    }
     if (action === 'reload-settings') {
       await refresh();
       renderSettings();

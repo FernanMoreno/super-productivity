@@ -4,6 +4,14 @@ import { PlannerError } from '../../../../packages/personal-planner-core/operati
 
 export const PLANNER_SCOPES: Record<string, readonly AssistantAccessScope[]> = {
   activities: ['planner:read'],
+  operation_status: ['planner:read'],
+  schedule: [
+    'planner:read',
+    'planner:write',
+    'tasks:read',
+    'tasks:read_history',
+    'tasks:write',
+  ],
   query: ['planner:read', 'tasks:read', 'tasks:read_history'],
   prepare: ['planner:read', 'tasks:read', 'tasks:read_history'],
   edit: ['planner:read', 'planner:write'],

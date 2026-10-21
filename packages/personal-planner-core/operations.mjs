@@ -18,6 +18,7 @@ import {
   instant,
 } from './schedule.mjs';
 import { areaMetrics, effectiveArea } from './metrics.mjs';
+import { proposeNativeTasks } from './native-proposals.mjs';
 export const PROFILE_KEY = 'profile-v1';
 export class PlannerError extends Error {
   constructor(code, message) {
@@ -29,6 +30,60 @@ const rejected = (code, message) => ({ status: 'rejected', code, message });
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const ensure = (condition, message) => {
   if (!condition) throw new PlannerError('INVALID_ARGUMENTS', message);
+};
+const journalActions = new Set(['edit', 'task', 'log_time', 'apply']);
+const resultStates = new Set(['applied', 'rejected', 'conflict', 'uncertain']);
+const validOperationId = (value) =>
+  typeof value === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(value);
+const readReceipt = (raw) => {
+  let receipt;
+  try {
+    receipt = JSON.parse(raw);
+  } catch {
+    throw new PlannerError(
+      'DATA_CORRUPT',
+      'El recibo de la operación no se puede leer. No se reejecuta.',
+    );
+  }
+  if (
+    !record(receipt) ||
+    !journalActions.has(receipt.action) ||
+    typeof receipt.signature !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(receipt.signature) ||
+    (Object.hasOwn(receipt, 'result')
+      ? !record(receipt.result) || !resultStates.has(receipt.result.status)
+      : receipt.status !== 'pending' || !Number.isFinite(receipt.createdAt))
+  )
+    throw new PlannerError(
+      'DATA_CORRUPT',
+      'El recibo de la operación no es válido. No se reejecuta.',
+    );
+  return receipt;
+};
+// Status queries expose only stable outcome fields, never original arguments,
+// error messages, profile contents or native task payloads stored in a receipt.
+const receiptResult = (value) => {
+  const result = { status: value.status };
+  const patterns = {
+    code: /^[A-Z][A-Z0-9_]{0,79}$/,
+    taskId: /^[A-Za-z0-9_-]{1,200}$/,
+    revision: /^[a-f0-9]{64}$/,
+  };
+  for (const [key, pattern] of Object.entries(patterns))
+    if (typeof value[key] === 'string' && pattern.test(value[key]))
+      result[key] = value[key];
+  if (validDate(value.date)) result.date = value.date;
+  if (Number.isSafeInteger(value.durationMs) && value.durationMs > 0)
+    result.durationMs = value.durationMs;
+  for (const key of ['commitmentIds', 'taskIds'])
+    if (
+      Array.isArray(value[key]) &&
+      value[key].every(
+        (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id),
+      )
+    )
+      result[key] = [...value[key]];
+  return result;
 };
 export function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -65,6 +120,7 @@ export async function contextRevision(profile, snapshot) {
     'timeSpentOnDay',
     'dueDay',
     'dueWithTime',
+    'remindAt',
     'deadlineDay',
     'deadlineWithTime',
   ];
@@ -271,14 +327,16 @@ export function createPlannerOperations(ports) {
   const journal = async (action, args, work) => {
     const operationId = args.operationId;
     ensure(
-      typeof operationId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(operationId),
+      validOperationId(operationId),
       'operationId debe tener 8–80 caracteres alfanuméricos, guiones o guiones bajos.',
     );
     const key = 'op-' + operationId,
       signature = await revision({ action, args });
+    await authorize(action);
     const raw = await ports.read(key);
+    await authorize(action);
     if (raw !== null) {
-      const prior = JSON.parse(raw);
+      const prior = readReceipt(raw);
       if (prior.signature !== signature)
         return rejected(
           'OPERATION_ID_REUSED',
@@ -354,6 +412,52 @@ export function createPlannerOperations(ports) {
     return { status: 'applied', revision: await revision(JSON.stringify(candidate)) };
   };
   const api = {
+    async operationStatus({ action, operationId }) {
+      ensure(
+        journalActions.has(action) && validOperationId(operationId),
+        'Acción u operationId inválidos.',
+      );
+      await authorize(action);
+      const raw = await ports.read('op-' + operationId);
+      // A permission revoked while storage was being read must not expose a receipt.
+      await authorize(action);
+      if (raw === null)
+        return {
+          action,
+          operationId,
+          status: 'not_found',
+          receiptState: 'missing',
+          retrySafe: false,
+        };
+      const receipt = readReceipt(raw);
+      if (receipt.action !== action)
+        return {
+          action,
+          operationId,
+          ...rejected(
+            'OPERATION_ACTION_MISMATCH',
+            'Este identificador no corresponde a la acción solicitada.',
+          ),
+        };
+      if (!Object.hasOwn(receipt, 'result'))
+        return {
+          action,
+          operationId,
+          status: 'uncertain',
+          code: 'OUTCOME_UNKNOWN',
+          receiptState: 'pending',
+          retrySafe: false,
+        };
+      const result = receiptResult(receipt.result);
+      return {
+        action,
+        operationId,
+        status: result.status,
+        ...(result.code ? { code: result.code } : {}),
+        receiptState: 'finished',
+        result,
+      };
+    },
     async activities() {
       const { profile, revision } = await load();
       return { profile, revision };
@@ -378,9 +482,24 @@ export function createPlannerOperations(ports) {
       );
     },
     async logTime(args) {
-      return journal('log_time', args, async () =>
-        ports.native('log_time', args, (await load()).profile),
-      );
+      return journal('log_time', args, async () => {
+        const current = await load(),
+          snapshot = await ports.snapshot(current.profile);
+        if ((await ports.read(PROFILE_KEY)) !== current.raw)
+          throw new PlannerError(
+            'STALE_DATA',
+            'La configuración cambió antes de registrar tiempo.',
+          );
+        ensure(
+          typeof snapshot.assertCurrent === 'function',
+          'El host no permite comprobar cambios antes de registrar tiempo.',
+        );
+        return ports.native(
+          'log_time',
+          { ...args, assertCurrent: snapshot.assertCurrent },
+          current.profile,
+        );
+      });
     },
     async query({ from, to }) {
       const dates = range(from, to),
@@ -435,8 +554,11 @@ export function createPlannerOperations(ports) {
         snapshot = await ports.snapshot(profile);
       const plans = dates.map((d) => scenario(profile, snapshot, d));
       const items = [
-        ...plans.flatMap((v) => v.proposals),
-        ...proposeActivitiesWeek(profile, snapshot, dates),
+        ...[
+          ...plans.flatMap((v) => v.proposals),
+          ...proposeActivitiesWeek(profile, snapshot, dates),
+        ].map((item) => ({ ...item, target: 'commitment' })),
+        ...proposeNativeTasks(profile, snapshot, dates),
       ].map((p) => ({ ...p, id: crypto.randomUUID() }));
       const proposalId = crypto.randomUUID(),
         base = await contextRevision(profile, snapshot),
@@ -454,7 +576,7 @@ export function createPlannerOperations(ports) {
           personalExcess: s.personalExcess,
         })),
         message:
-          'Propuesta revisable: solo reserva bloques seleccionados del planificador; no mueve tareas nativas.',
+          'Alternativas revisables: selecciona reservas del planificador o tareas nativas, por separado. No se modifica nada al preparar.',
       };
       for (const [id, p] of proposals) if (p.expiresAt < Date.now()) proposals.delete(id);
       if (proposals.size >= 100)
@@ -489,6 +611,44 @@ export function createPlannerOperations(ports) {
             new Set(args.selection).size === args.selection.length,
           'Selecciona bloques sin duplicados.',
         );
+        const selected = args.selection.map((id) =>
+          proposal.proposals.find((item) => item.id === id),
+        );
+        ensure(
+          selected.every((item) => item?.interval),
+          'Bloque no disponible.',
+        );
+        ensure(
+          new Set(selected.map((item) => item.target)).size === 1,
+          'Aplica reservas y tareas nativas por separado; no forman una transacción atómica.',
+        );
+        ensure(
+          typeof snapshot.assertCurrent === 'function',
+          'El host no permite comprobar cambios nativos al aplicar propuestas.',
+        );
+        if (selected[0].target === 'native-task') {
+          ensure(
+            typeof ports.native === 'function',
+            'El host no admite reprogramar tareas nativas.',
+          );
+          if ((await ports.read(PROFILE_KEY)) !== current.raw)
+            throw new PlannerError(
+              'STALE_PLAN',
+              'La configuración cambió antes de reprogramar las tareas.',
+            );
+          return ports.native(
+            'schedule',
+            {
+              entries: selected.map((item) => ({
+                taskId: item.taskId,
+                dueWithTime: item.interval[0],
+                expected: item.expected,
+              })),
+              assertCurrent: snapshot.assertCurrent,
+            },
+            current.profile,
+          );
+        }
         const candidate = structuredClone(current.profile);
         for (const id of args.selection) {
           const item = proposal.proposals.find((p) => p.id === id);

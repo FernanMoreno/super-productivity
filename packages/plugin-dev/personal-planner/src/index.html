@@ -224,10 +224,51 @@
       <section id="week">
         <h2>Disponibilidad semanal</h2>
         <div id="week-content"></div>
+        <h3>Reorganización revisable</h3>
+        <p>
+          Prepara alternativas para las tareas nativas y las actividades de esta semana.
+          Preparar no modifica el calendario.
+        </p>
+        <button
+          type="button"
+          data-action="prepare-shared"
+          data-id=""
+        >
+          Preparar propuesta de la semana
+        </button>
+        <div
+          id="proposal-review"
+          aria-live="polite"
+        ></div>
       </section>
       <section id="settings">
         <h2>Configuración</h2>
         <div id="settings-content"></div>
+        <details>
+          <summary>Consultar una operación tras perder conexión</summary>
+          <form data-form="operation-status">
+            <label
+              >Tipo de operación<select name="action">
+                <option value="edit">Configuración</option>
+                <option value="task">Tarea</option>
+                <option value="log_time">Registro de tiempo</option>
+                <option value="apply">Aplicar propuesta</option>
+              </select></label
+            >
+            <label
+              >Identificador de operación<input
+                name="operationId"
+                required
+                pattern="[A-Za-z0-9_-]{8,80}"
+                maxlength="80"
+            /></label>
+            <button>Consultar recibo sin repetir cambios</button>
+            <p
+              id="operation-result"
+              role="status"
+            ></p>
+          </form>
+        </details>
       </section>
     </main>
     <!-- BUILD:SCRIPT -->

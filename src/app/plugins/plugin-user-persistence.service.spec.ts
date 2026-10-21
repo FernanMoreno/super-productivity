@@ -361,6 +361,36 @@ describe('PluginUserPersistenceService', () => {
       expect(result).toBeNull();
     });
 
+    it('preserves an existing empty string instead of reporting a missing entry', async () => {
+      store.overrideSelector(selectPluginUserDataFeatureState, [
+        { id: 'test-plugin:empty', data: '' },
+      ]);
+      expect(await service.loadPluginUserData('test-plugin:empty')).toBe('');
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a present entry with a malformed non-string payload', async () => {
+      for (const malformed of [undefined, null, 0, false]) {
+        store.overrideSelector(selectPluginUserDataFeatureState, [
+          { id: 'test-plugin:corrupt', data: malformed as unknown as string },
+        ]);
+        await expectAsync(
+          service.loadPluginUserData('test-plugin:corrupt'),
+        ).toBeRejectedWithError('Stored plugin data could not be decoded');
+      }
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects corrupt stored data instead of presenting an empty profile', async () => {
+      store.overrideSelector(selectPluginUserDataFeatureState, [
+        { id: 'test-plugin', data: SENTINEL + 'invalid-gzip' },
+      ]);
+      await expectAsync(service.loadPluginUserData('test-plugin')).toBeRejectedWithError(
+        'Stored plugin data could not be decoded',
+      );
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
     it('should return a pending coalesced write before it is committed', async () => {
       const baseTime = Date.now();
       jasmine.clock().install();

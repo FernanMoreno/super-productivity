@@ -22,6 +22,13 @@ export const input = (label, name, type, value, attrs = '') =>
   `<label>${label}<input name="${name}" type="${type}" value="${escape(value)}" ${attrs}></label>`;
 export const button = (action, id, label) =>
   `<button type="button" data-action="${action}" data-id="${escape(id)}">${label}</button>`;
+export function proposalReviewHTML(proposal, clock) {
+  const rows = (proposal.proposals || []).map(
+    (p) =>
+      `<li>${p.interval ? `<label><input type="checkbox" name="selection" value="${escape(p.id)}">` : ''}${escape(p.title || p.area)} · ${p.target === 'native-task' ? 'Calendario nativo' : 'Bloque del planificador'}${p.interval ? ` · ${escape(p.date || '')} ${escape(clock(p.interval[0]))}–${escape(clock(p.interval[1]))}</label>` : ''}<p>${escape(p.reason || '')}</p></li>`,
+  );
+  return `<form data-form="apply-proposal"><p>Selecciona únicamente los cambios que quieras aplicar. Las tareas nativas y los bloques del planificador se aplican por separado. Si cambian los datos, prepara otra propuesta.</p>${list(rows, 'Sin propuestas con los datos actuales.')}<button>Aplicar selección revisada</button></form>`;
+}
 const areaOptions = (p, current = '', exclude = '') =>
   option('', 'Sin actividad', !current) +
   orderedAreas(p)

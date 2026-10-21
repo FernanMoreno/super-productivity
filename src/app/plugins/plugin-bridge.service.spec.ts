@@ -159,6 +159,24 @@ describe('PluginBridgeService - Counter Methods', () => {
   });
 
   describe('durable plugin persistence', () => {
+    it('propagates a persistence read failure instead of returning absence', async () => {
+      const persistence = TestBed.inject(PluginUserPersistenceService);
+      persistence.loadPluginUserData = jasmine
+        .createSpy()
+        .and.rejectWith(new Error('Read unavailable'));
+      await expectAsync(
+        service['_loadPersistedData']('test-plugin'),
+      ).toBeRejectedWithError('Read unavailable');
+    });
+
+    it('propagates an archive read failure instead of returning zero historic tasks', async () => {
+      const archive = TestBed.inject(TaskArchiveService);
+      archive.load = jasmine.createSpy().and.rejectWith(new Error('Archive unavailable'));
+      await expectAsync(service.getArchivedTasks()).toBeRejectedWithError(
+        'Archive unavailable',
+      );
+    });
+
     it('waits for the coalesced commit and durable flush before acknowledging', async () => {
       let commit!: () => void;
       let flush!: () => void;

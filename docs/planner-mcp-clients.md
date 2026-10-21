@@ -32,6 +32,7 @@ La adaptación añade `planner:read`, `planner:write`, `tasks:read_history`, `ta
 - `planner_log_time`: registro mediante seguimiento nativo, con protección frente a reintentos.
 - `planner_prepare`: preparar propuestas revisables sin aplicar cambios.
 - `planner_apply`: aplicar la selección explícita de una preparación todavía vigente.
+- `planner_operation_status`: consultar el recibo durable de una operación sin repetirla; requiere los permisos de su acción original.
 
 No se debe suponer que todas estarán disponibles con una clave de solo lectura. Los errores de datos incompletos, archivo inaccesible o revisión obsoleta deben conservarse visibles. Los parámetros concretos se consultan en los esquemas descubiertos; los ejemplos de cliente no duplican esos contratos.
 
@@ -98,7 +99,13 @@ node tools/mcpb/tests/client-discovery.cjs --parser-only
 
 Las pruebas del adaptador utilizan HTTP simulado y datos ficticios: formato JSON por líneas, orden de respuestas, autenticación, ausencia de `Origin`, lectura de clave externa, errores, timeout y ausencia de reintentos. No contienen horarios personales.
 
-El segundo comando comprueba el analizador de Codex mediante una opción temporal y la escritura/lectura de OpenCode en un directorio de configuración aislado. No modifica la configuración real ni invoca modelos. Un intento aislado de `opencode mcp list` agotó el plazo sin devolver salida. Esa orden utiliza el servicio en segundo plano de OpenCode V2; el script de comprobación se limita al analizador y no se conecta a un servicio existente. **No se acredita descubrimiento de OpenCode ni conexión real con Electron por esta prueba**.
+El segundo comando comprueba únicamente el analizador. Para autenticación y descubrimiento reales, sin inferencia y con perfiles temporales, utiliza:
+
+```bash
+SP_TEST_ADMIN_CLIENTS=1 node --test tools/mcpb/tests/admin-client-runtime.test.cjs
+```
+
+Este último utiliza HTTP ficticio y comprueba que Claude Code y OpenCode realizan `initialize` y `tools/list`. OpenCode se ejecuta como un servidor privado temporal: evita depender del servicio de fondo de `mcp list`, cuyo bloqueo previo no se ha diagnosticado completamente. Ninguno de estos clientes expuso una llamada manual a herramientas mediante sus comandos administrativos inspeccionados.
 
 Las pruebas reales de la aplicación, IPC, persistencia y cliente MCP deben documentarse separadamente con sus resultados. Ninguna lectura de ayuda o simulación demuestra por sí sola que la aplicación instalada soporte estas herramientas.
 
@@ -110,4 +117,6 @@ Los guardados del panel utilizan las mismas operaciones validadas que MCP, con r
 
 Las propuestas que se revisan en el formulario manual también comprueban cambios de perfil y tareas antes de guardar. La operación MCP `planner_apply` añade la comprobación nativa final del anfitrión. El formulario manual no constituye una transacción atómica con el temporizador nativo: al configurar una reserva, revisa los conflictos visibles y el estado actual.
 
-La validación final de esta adaptación sí conectó Codex CLI 0.163.0 a Electron real: descubrimiento y `planner_query` mediante app-server, sin iniciar turnos ni usar un modelo. También conectó el SDK oficial MCP 1.32.1 por HTTP y por el puente stdio con archivo privado de clave. Eso acredita los transportes y Codex; no acredita el cliente Claude Desktop, Claude Code ni el descubrimiento OpenCode. Los resultados completos y los límites están en [VALIDACION-MCP.md](../packages/plugin-dev/personal-planner/VALIDACION-MCP.md).
+La prueba Electron puede incluir Codex con `PLANNER_MCP_CODEX=1` y Claude Code/OpenCode con `PLANNER_MCP_ADMIN_CLIENTS=1`. Codex ejecuta una consulta mediante app-server sin iniciar turnos; los otros dos realizan conexión y descubrimiento administrativos. El SDK oficial MCP prueba llamadas HTTP y stdio. Los resultados efectivamente obtenidos se documentan en [VALIDACION-LIMITES.md](../packages/plugin-dev/personal-planner/VALIDACION-LIMITES.md).
+
+Claude Desktop 1.20186.1.0 se arrancó con `CLAUDE_USER_DATA_DIR` aislado en Windows. Permaneció en la pantalla de inicio de sesión y no inició MCP durante la observación. No se utilizaron credenciales personales: falta comprobar el cliente después de iniciar sesión. Las instrucciones stdio y MCPB quedan preparadas, y el transporte se prueba separadamente con el SDK oficial.

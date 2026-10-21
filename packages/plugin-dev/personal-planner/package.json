@@ -1,13 +1,13 @@
 {
   "name": "personal-planner",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Panel de planificación personal integrado en Super Productivity",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/browser.mjs && node tests/generic-browser.mjs && node tests/collaboration-browser.mjs",
+    "test:browser": "node tests/browser.mjs && node tests/generic-browser.mjs && node tests/collaboration-browser.mjs && node tests/shared-proposal-browser.mjs",
     "check": "node scripts/check.mjs",
     "test:app": "node tests/in-app.mjs",
     "package:host": "node scripts/package-host.mjs"

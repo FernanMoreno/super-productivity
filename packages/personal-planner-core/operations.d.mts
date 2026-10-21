@@ -51,6 +51,10 @@ export interface PlannerPorts {
   ): Promise<Record<string, unknown>>;
 }
 export interface PlannerOperations {
+  operationStatus(args: {
+    action: 'edit' | 'task' | 'log_time' | 'apply';
+    operationId: string;
+  }): Promise<Record<string, unknown>>;
   activities(): Promise<{ profile: PlannerProfile; revision: string }>;
   edit(args: Record<string, unknown>): Promise<Record<string, unknown>>;
   task(args: Record<string, unknown>): Promise<Record<string, unknown>>;

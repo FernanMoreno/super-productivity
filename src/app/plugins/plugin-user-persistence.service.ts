@@ -324,10 +324,12 @@ export class PluginUserPersistenceService {
       this._store.select(selectPluginUserDataFeatureState),
     );
     const pluginData = currentState.find((item) => item.id === entityId);
-    if (!pluginData?.data) {
+    if (!pluginData) {
       return null;
     }
     try {
+      if (typeof pluginData.data !== 'string')
+        throw new Error('Stored plugin data is not a string');
       return await decodeFromPersist(pluginData.data);
     } catch (err) {
       // Don't log `err` directly — gzip/atob messages can contain partial
@@ -336,7 +338,7 @@ export class PluginUserPersistenceService {
         entityId,
         errName: (err as Error)?.name,
       });
-      return null;
+      throw new Error('Stored plugin data could not be decoded');
     }
   }
 

@@ -340,6 +340,13 @@ export class PluginAPI implements PluginAPIInterface {
     return this.#boundMethods.persistDataSynced(dataStr, key);
   }
 
+  plannerOperation(
+    action: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.#boundMethods.plannerOperation(action, params);
+  }
+
   compareAndSwapSyncedData(
     expected: string | null,
     dataStr: string,
