@@ -1,5 +1,7 @@
-import { OperationWriteFlushService } from '../op-log/sync/operation-write-flush.service';
-import { OperationCaptureService } from '../op-log/capture/operation-capture.service';
+import {
+  persistPluginDataSynced,
+  compareAndSwapPluginData,
+} from './plugin-persistence-api';
 import { computed, inject, Injectable, Injector, OnDestroy, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { MatDialog } from '@angular/material/dialog';
@@ -241,6 +243,11 @@ export class PluginBridgeService implements OnDestroy {
     pluginId: string,
     manifest?: PluginManifest,
   ): {
+    compareAndSwapSyncedData: (
+      expected: string | null,
+      dataStr: string,
+      key?: string,
+    ) => Promise<boolean>;
     persistDataSynced: (dataStr: string, key?: string) => Promise<void>;
     loadPersistedData: (key?: string) => Promise<string | null>;
     getConfig: () => Promise<unknown>;
@@ -300,6 +307,14 @@ export class PluginBridgeService implements OnDestroy {
   } {
     return {
       // Data persistence
+      compareAndSwapSyncedData: (expected, dataStr, key) =>
+        compareAndSwapPluginData(
+          this._pluginUserPersistenceService,
+          pluginId,
+          expected,
+          dataStr,
+          key,
+        ),
       persistDataSynced: (dataStr: string, key?: string) =>
         this._persistDataSynced(pluginId, dataStr, key),
       loadPersistedData: (key?: string) => this._loadPersistedData(pluginId, key),
@@ -1369,32 +1384,14 @@ export class PluginBridgeService implements OnDestroy {
     dataStr: string,
     key?: string,
   ): Promise<void> {
-    pluginAssert.string(dataStr);
-    assertPluginPersistenceKey(key);
-
-    try {
-      const entityId = composeId(pluginId, key);
-      await this._pluginUserPersistenceService.persistPluginUserData(entityId, dataStr);
-      // Dispatch is synchronous, disk persistence is not. Never acknowledge a
-      // save while its operation is only in memory (including coalesced saves).
-      await this._injector.get(OperationWriteFlushService).flushPendingWrites();
-      if (this._injector.get(OperationCaptureService).hasUnrecoveredPersistFailure()) {
-        throw new Error('Plugin data could not be made durable; reload before retrying');
-      }
-      PluginLog.log('PluginBridge: Plugin data persisted successfully', {
-        pluginId,
-        keyLen: key?.length ?? 0,
-        dataSize: new Blob([dataStr]).size,
-      });
-    } catch (error) {
-      PluginLog.err('PluginBridge: Failed to persist plugin data:', error);
-
-      // Rethrow with the original error message for better debugging
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error(this._translateService.instant(T.PLUGINS.UNABLE_TO_PERSIST_DATA));
-    }
+    return persistPluginDataSynced(
+      this._injector,
+      this._pluginUserPersistenceService,
+      this._translateService,
+      pluginId,
+      dataStr,
+      key,
+    );
   }
 
   /**

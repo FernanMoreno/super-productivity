@@ -40,6 +40,9 @@ export class RendererTimeoutError extends Error {}
 export interface ToolSpec {
   definition: McpToolDefinition;
   scope?: AssistantAccessScope;
+  requiredScopes?: readonly AssistantAccessScope[];
+  /** Preserve the outcome of a mutation even if access is revoked in flight. */
+  mutates?: boolean;
   run: (
     args: Record<string, unknown>,
     scopes: readonly AssistantAccessScope[],
@@ -175,6 +178,7 @@ export const fitToResponseCap = <T>(items: T[], wrap: (items: T[]) => unknown): 
 // --- renderer replies ----------------------------------------------------------
 
 const RENDERER_ERRORS: Record<string, string> = {
+  NOT_PERMITTED: 'Assistant access is disabled or the required permission was revoked.',
   APP_NOT_READY: 'Super Productivity is still loading. Retry in a few seconds.',
   TASK_NOT_FOUND: 'No active task has this id.',
 };

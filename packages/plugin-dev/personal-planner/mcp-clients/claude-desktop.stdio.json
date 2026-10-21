@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "super-productivity": {
+      "command": "node",
+      "args": ["C:\\RUTA\\super-productivity\\tools\\mcpb\\server\\index.js"],
+      "env": { "SP_ACCESS_KEY_FILE": "C:\\RUTA_PRIVADA\\super-productivity-mcp.token" }
+    }
+  }
+}

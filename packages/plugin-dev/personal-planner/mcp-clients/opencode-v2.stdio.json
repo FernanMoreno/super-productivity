@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "super-productivity": {
+        "type": "local",
+        "command": ["node", "/RUTA/super-productivity/tools/mcpb/server/index.js"],
+        "environment": {
+          "SP_ACCESS_KEY_FILE": "/RUTA_PRIVADA/super-productivity-mcp.token"
+        },
+        "codemode": false
+      }
+    }
+  }
+}

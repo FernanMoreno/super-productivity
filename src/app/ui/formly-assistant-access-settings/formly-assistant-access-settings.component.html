@@ -56,6 +56,42 @@
       >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_CAPTURE | translate }}</mat-checkbox
     >
 
+    <mat-checkbox
+      class="scope"
+      [checked]="hasScope('planner:read')"
+      [disabled]="isBusy()"
+      (change)="setScope('planner:read', $event.checked, $event.source)"
+      >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_PLANNER_READ | translate }}</mat-checkbox
+    >
+    <mat-checkbox
+      class="scope"
+      [checked]="hasScope('planner:write')"
+      [disabled]="isBusy()"
+      (change)="setScope('planner:write', $event.checked, $event.source)"
+      >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_PLANNER_WRITE | translate }}</mat-checkbox
+    >
+    <mat-checkbox
+      class="scope"
+      [checked]="hasScope('tasks:read_history')"
+      [disabled]="isBusy()"
+      (change)="setScope('tasks:read_history', $event.checked, $event.source)"
+      >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_HISTORY | translate }}</mat-checkbox
+    >
+    <mat-checkbox
+      class="scope"
+      [checked]="hasScope('tasks:write')"
+      [disabled]="isBusy()"
+      (change)="setScope('tasks:write', $event.checked, $event.source)"
+      >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_TASK_WRITE | translate }}</mat-checkbox
+    >
+    <mat-checkbox
+      class="scope"
+      [checked]="hasScope('time:write')"
+      [disabled]="isBusy()"
+      (change)="setScope('time:write', $event.checked, $event.source)"
+      >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_TIME_WRITE | translate }}</mat-checkbox
+    >
+
     <h3 class="sub-section-heading">
       {{ T.GCF.MISC.ASSISTANT_ACCESS_KEY | translate }}
     </h3>

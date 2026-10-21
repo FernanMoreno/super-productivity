@@ -340,6 +340,14 @@ export class PluginAPI implements PluginAPIInterface {
     return this.#boundMethods.persistDataSynced(dataStr, key);
   }
 
+  compareAndSwapSyncedData(
+    expected: string | null,
+    dataStr: string,
+    key?: string,
+  ): Promise<boolean> {
+    return this.#boundMethods.compareAndSwapSyncedData(expected, dataStr, key);
+  }
+
   loadSyncedData(key?: string): Promise<string | null> {
     PluginLog.log(`Plugin ${this.#pluginId} requested to load persisted data`, {
       keyLen: key?.length ?? 0,

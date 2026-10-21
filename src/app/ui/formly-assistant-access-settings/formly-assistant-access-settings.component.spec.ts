@@ -4,7 +4,10 @@ import { TranslateModule } from '@ngx-translate/core';
 import { FormlyAssistantAccessSettingsComponent } from './formly-assistant-access-settings.component';
 import { SnackService } from '../../core/snack/snack.service';
 import { T } from '../../t.const';
-import { AssistantAccessState } from '../../../../electron/shared-with-frontend/assistant-access.model';
+import {
+  AssistantAccessState,
+  AssistantAccessScope,
+} from '../../../../electron/shared-with-frontend/assistant-access.model';
 
 describe('FormlyAssistantAccessSettingsComponent', () => {
   let fixture: ComponentFixture<FormlyAssistantAccessSettingsComponent>;
@@ -107,6 +110,30 @@ describe('FormlyAssistantAccessSettingsComponent', () => {
     await component.setScope('tasks:read', false);
 
     expect(setAssistantAccessScopes).toHaveBeenCalledOnceWith(['tasks:capture']);
+  });
+
+  it('shows five independent planner permissions, all off until explicitly granted', async () => {
+    const setAssistantAccessScopes = jasmine
+      .createSpy()
+      .and.callFake(async (scopes) => state({ scopes }));
+    setEa({ setAssistantAccessScopes });
+    fixture.detectChanges();
+    await settle();
+    const scopes: AssistantAccessScope[] = [
+      'planner:read',
+      'planner:write',
+      'tasks:read_history',
+      'tasks:write',
+      'time:write',
+    ];
+    expect(fixture.nativeElement.querySelectorAll('mat-checkbox.scope').length).toBe(8);
+    for (const scope of scopes) expect(component.hasScope(scope)).toBeFalse();
+    await component.setScope('planner:write', true);
+    expect(setAssistantAccessScopes).toHaveBeenCalledOnceWith(['planner:write']);
+    expect(component.hasScope('planner:read')).toBeFalse();
+    expect(component.hasScope('tasks:capture')).toBeFalse();
+    await component.setScope('planner:write', false);
+    expect(setAssistantAccessScopes).toHaveBeenCalledWith([]);
   });
 
   it('shows a generated key once and puts it into the setup snippets', async () => {

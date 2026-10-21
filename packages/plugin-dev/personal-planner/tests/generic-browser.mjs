@@ -23,8 +23,13 @@ try {
       getAppState: async () => ({
         globalConfig: { misc: { startOfNextDayTime: '00:00' } },
       }),
-      loadSyncedData: async () => localStorage.getItem('planner'),
-      persistDataSynced: async (v) => localStorage.setItem('planner', v),
+      loadSyncedData: async (key) =>
+        localStorage.getItem(key === 'profile-v1' ? 'planner' : 'planner-' + key),
+      compareAndSwapSyncedData: async (expected, value, key) => {
+        if ((await window.PluginAPI.loadSyncedData(key)) !== expected) return false;
+        localStorage.setItem(key === 'profile-v1' ? 'planner' : 'planner-' + key, value);
+        return true;
+      },
     };
   });
   const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('planner')));
@@ -150,8 +155,13 @@ try {
       getAppState: async () => ({
         globalConfig: { misc: { startOfNextDayTime: '00:00' } },
       }),
-      loadSyncedData: async () => null,
-      persistDataSynced: async () => {},
+      loadSyncedData: async (key) =>
+        localStorage.getItem(key === 'profile-v1' ? 'planner' : 'planner-' + key),
+      compareAndSwapSyncedData: async (expected, value, key) => {
+        if ((await window.PluginAPI.loadSyncedData(key)) !== expected) return false;
+        localStorage.setItem(key === 'profile-v1' ? 'planner' : 'planner-' + key, value);
+        return true;
+      },
     };
   });
   await demoPage.goto(`http://127.0.0.1:${server.address().port}`);

@@ -752,6 +752,11 @@ export interface PluginAPI {
   // plugin chooses (the host reserves ':' only as the pluginId/key
   // delimiter and only enforces that the pluginId itself is clean).
   // Empty-string keys are equivalent to omitting the argument.
+  /** Local renderer CAS for cooperating writers; true only after durable storage.
+   * False means the raw value changed. Errors after dispatch may have uncertain outcome.
+   * This is not a distributed transaction across synced devices.
+   */
+  compareAndSwapSyncedData(expected: string | null, dataStr: string, key?: string): Promise<boolean>;
   persistDataSynced(dataStr: string, key?: string): Promise<void>;
 
   loadSyncedData(key?: string): Promise<string | null>;

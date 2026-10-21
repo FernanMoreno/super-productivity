@@ -21,8 +21,13 @@ import {
   scenario,
   proposeActivitiesWeek,
 } from './schedule.mjs';
-import { areaMetrics, scheduledDay } from './metrics.mjs';
+import {
+  areaMetrics,
+  scheduledDay,
+  effectiveArea as effectiveAreaForProfile,
+} from './metrics.mjs';
 import { createAdapter } from './adapter.mjs';
+import { contextRevision } from '../../../personal-planner-core/operations.mjs';
 import {
   escape,
   list,
@@ -39,7 +44,13 @@ let profile,
   busy = false,
   loaded = false,
   proposals = [],
-  settingsDirty = false;
+  settingsDirty = false,
+  profileRevision,
+  settingsRevision,
+  reviewedProposalContext = null,
+  refreshTimer,
+  externalRefreshPending = false,
+  nativeRefreshPending = false;
 const date = () => $('day').value || localDay(Date.now(), profile?.timezone);
 const minutes = (n) => (n === null ? 'No calculable' : `${Math.round(n)} min`);
 const clock = (epoch) =>
@@ -58,21 +69,7 @@ function error(message) {
 function clearError() {
   $('error').hidden = true;
 }
-function effectiveArea(a) {
-  const included = [a],
-    ids = new Set([a.id]);
-  for (let i = 0; i < included.length; i++)
-    for (const child of profile.areas.filter((v) => v.parentAreaId === included[i].id))
-      if (!ids.has(child.id)) {
-        included.push(child);
-        ids.add(child.id);
-      }
-  return {
-    ...a,
-    projectIds: [...new Set(included.flatMap((v) => v.projectIds))],
-    tagIds: [...new Set(included.flatMap((v) => v.tagIds))],
-  };
-}
+const effectiveArea = (a) => effectiveAreaForProfile(profile, a);
 const metric = (a, day = date()) => areaMetrics(data, effectiveArea(a), day);
 const mapped = (a) => {
   const e = effectiveArea(a);
@@ -263,6 +260,26 @@ function renderData() {
 function renderSettings() {
   $('settings-content').innerHTML = settingsHTML(profile, data, date());
   settingsDirty = false;
+  settingsRevision = profileRevision;
+  reviewedProposalContext = null;
+}
+function showExternalConflict() {
+  error(
+    'La configuración cambió desde otra ventana o asistente. Tus campos siguen intactos; no se sobrescribirán los cambios externos. Copia lo que quieras conservar antes de descartar el borrador.',
+  );
+  $('error').insertAdjacentHTML(
+    'beforeend',
+    button('reload-settings', '', 'Descartar borrador y cargar configuración actual'),
+  );
+}
+function scheduleExternalRefresh(native = false) {
+  nativeRefreshPending ||= native === true;
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    const nativeChanged = nativeRefreshPending;
+    nativeRefreshPending = false;
+    if (loaded) void refresh({ externalOnly: true, nativeChanged });
+  }, 250);
 }
 function refreshAssociations() {
   for (const [name, items] of [
@@ -294,8 +311,22 @@ async function save(candidate, form) {
     const changed =
       profile?.timezone !== candidate.timezone ||
       profile?.weekStartsOn !== candidate.weekStartsOn;
-    await adapter.save(candidate);
+    if (form?.dataset.form === 'event' && reviewedProposalContext) {
+      const currentData = await adapter.snapshot(profile.timezone, profile.weekStartsOn);
+      if ((await contextRevision(profile, currentData)) !== reviewedProposalContext)
+        throw Object.assign(
+          Error(
+            'Propuesta obsoleta: cambiaron el perfil o las tareas. Conserva tus campos y prepara otra propuesta antes de reservar.',
+          ),
+          { code: 'STALE_PLAN' },
+        );
+    }
+    const result = await adapter.save(candidate, {
+      baseRevision: settingsDirty ? settingsRevision : profileRevision,
+      operationId: crypto.randomUUID(),
+    });
     profile = candidate;
+    profileRevision = result.revision;
     if (changed) {
       try {
         data = await adapter.snapshot(profile.timezone, profile.weekStartsOn);
@@ -313,26 +344,44 @@ async function save(candidate, form) {
   } finally {
     busy = false;
     buttons.forEach((b) => (b.disabled = false));
+    if (externalRefreshPending) {
+      externalRefreshPending = false;
+      scheduleExternalRefresh();
+    }
   }
 }
-async function refresh() {
-  if (busy) return;
+async function refresh({ externalOnly = false, nativeChanged = false } = {}) {
+  if (busy) {
+    if (externalOnly) externalRefreshPending = true;
+    nativeRefreshPending ||= nativeChanged;
+    return;
+  }
   busy = true;
-  clearError();
-  $('refresh').disabled = true;
-  $('status').textContent = 'Cargando datos…';
   try {
-    adapter ??= createAdapter(window.PluginAPI);
-    if (!loaded) {
-      profile = await adapter.load();
-      $('day').value = localDay(Date.now(), profile.timezone);
+    if (!adapter) {
+      adapter = createAdapter(window.PluginAPI);
+      adapter.watch(scheduleExternalRefresh);
     }
-    data = await adapter.snapshot(profile.timezone, profile.weekStartsOn);
+    const state = await adapter.loadState();
+    const changed = state.revision !== profileRevision;
+    if (externalOnly && loaded && !changed && !nativeChanged) return;
+    clearError();
+    $('refresh').disabled = true;
+    $('status').textContent = 'Cargando datos…';
+    const nextData = await adapter.snapshot(
+      state.profile.timezone,
+      state.profile.weekStartsOn,
+    );
+    profile = state.profile;
+    profileRevision = state.revision;
+    data = nextData;
+    if (!loaded) $('day').value = localDay(Date.now(), profile.timezone);
     renderData();
-    if (!loaded) {
-      renderSettings();
-      loaded = true;
-    } else refreshAssociations();
+    if (!loaded || (changed && !settingsDirty)) renderSettings();
+    else refreshAssociations();
+    if (loaded && settingsDirty && settingsRevision !== profileRevision)
+      showExternalConflict();
+    loaded = true;
     $('status').textContent =
       `Datos actualizados a las ${clock(Date.now())}. ${data.leaves.length} tareas sin doble suma de padres.`;
   } catch (e) {
@@ -342,6 +391,10 @@ async function refresh() {
   } finally {
     busy = false;
     $('refresh').disabled = false;
+    if (externalRefreshPending) {
+      externalRefreshPending = false;
+      scheduleExternalRefresh();
+    }
   }
 }
 document.addEventListener('submit', async (event) => {
@@ -461,7 +514,8 @@ document.addEventListener('submit', async (event) => {
     }
     await save(p, form);
   } catch (e) {
-    error(e.message);
+    if (e.code === 'STALE_DATA') showExternalConflict();
+    else error(e.message);
   }
 });
 document.addEventListener('click', async (event) => {
@@ -469,6 +523,12 @@ document.addEventListener('click', async (event) => {
   if (!b) return;
   try {
     const { action, id } = b.dataset;
+    if (action === 'reload-settings') {
+      await refresh();
+      renderSettings();
+      clearError();
+      return;
+    }
     if (action === 'task') {
       await adapter.selectTask(id);
       return;
@@ -489,6 +549,8 @@ document.addEventListener('click', async (event) => {
       return;
     }
     if (action === 'edit-event' || action === 'cancel-event') {
+      reviewedProposalContext = null;
+      settingsDirty = true;
       $('event-editor').innerHTML = eventForm(
         profile,
         date(),
@@ -500,6 +562,8 @@ document.addEventListener('click', async (event) => {
     if (action === 'review-proposal') {
       const p = proposals[Number(id)];
       if (!p?.interval) return;
+      reviewedProposalContext = await contextRevision(profile, data);
+      settingsDirty = true;
       const c = {
         title: p.title || p.area,
         kind: 'study',
@@ -519,6 +583,7 @@ document.addEventListener('click', async (event) => {
     }
     if (action === 'edit-deadline') {
       const [type, key] = id.split(':');
+      settingsDirty = true;
       $('deadline-editor').innerHTML = deadlineForm(
         profile,
         profile[type === 'deadline' ? 'deadlines' : 'milestones'].find(
@@ -559,7 +624,8 @@ document.addEventListener('click', async (event) => {
     }
     if (action.startsWith('remove-')) await save(p);
   } catch (e) {
-    error(e.message);
+    if (e.code === 'STALE_DATA') showExternalConflict();
+    else error(e.message);
   }
 });
 document.addEventListener('change', async (event) => {
@@ -591,10 +657,15 @@ $('day').addEventListener('change', () => {
       $('status').textContent =
         'Fecha de consulta cambiada. Los formularios conservan su fecha de aplicación y cambios sin guardar.';
   } catch (e) {
-    error(e.message);
+    if (e.code === 'STALE_DATA') showExternalConflict();
+    else error(e.message);
   }
 });
 window.addEventListener('focus', () => {
   if (loaded) refresh();
 });
 refresh();
+// Reload profile changes even when the host cannot deliver plugin hooks.
+setInterval(() => {
+  if (loaded) void refresh({ externalOnly: true, nativeChanged: true });
+}, 10000);

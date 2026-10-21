@@ -1,0 +1,3 @@
+[mcp_servers.super_productivity]
+url = "http://127.0.0.1:3876/mcp"
+bearer_token_env_var = "SP_ACCESS_KEY"

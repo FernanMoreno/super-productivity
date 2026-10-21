@@ -10,6 +10,7 @@ package code must respect the [sync dependency boundaries](../docs/sync-and-op-l
 | [shared-schema](shared-schema/src/)              | Shared schema versions, validation, and migrations                                                     |
 | [super-sync-server](super-sync-server/README.md) | Hosted sync API, accounts, and database; [server architecture](super-sync-server/docs/architecture.md) |
 | [plugin-api](plugin-api/README.md)               | Public types consumed by third-party plugins                                                           |
+| [personal-planner-core](personal-planner-core/)  | Shared pure planner models, operations, metrics and scheduling for iframe and native MCP               |
 | [plugin-dev](plugin-dev/)                        | Plugin implementations and examples; [development guide](../docs/plugin-development.md)                |
 | [vite-plugin](vite-plugin/src/)                  | Build tooling for plugins                                                                              |
 
@@ -27,15 +28,16 @@ are separate checks; one does not imply the others ran.
   For Vitest packages, append `-- <test-path>` to `npm test` for a focused run.
   Paths are relative to the package. Read the server guide before database tests.
 
-| Package           | Commands (repository root)                                                                                                                                                              |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| sync-core         | `npm run sync-core:build` and `npm run sync-core:test` (includes test type checking)                                                                                                    |
-| sync-providers    | `npm run sync-providers:build` and `npm run sync-providers:test` (includes test type checking)                                                                                          |
-| shared-schema     | `npm run shared-schema:build` and `npm run shared-schema:test`                                                                                                                          |
-| super-sync-server | `npm --prefix packages/super-sync-server run build` and `npm --prefix packages/super-sync-server test` (pretest generates Prisma client; see [setup](super-sync-server/README.md))      |
-| plugin-api        | `npm --prefix packages/plugin-api run typecheck`; `npm run plugin-api:build` when consumers need updated declarations                                                                   |
-| vite-plugin       | `npm run vite-plugin:build`                                                                                                                                                             |
-| plugin-dev        | `npm --prefix packages/plugin-dev ci` once (its own workspace and lockfile), then the affected plugin's scripts via `npm --prefix packages/plugin-dev/<name> run <script>`; checks vary |
+| Package               | Commands (repository root)                                                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| sync-core             | `npm run sync-core:build` and `npm run sync-core:test` (includes test type checking)                                                                                                    |
+| sync-providers        | `npm run sync-providers:build` and `npm run sync-providers:test` (includes test type checking)                                                                                          |
+| shared-schema         | `npm run shared-schema:build` and `npm run shared-schema:test`                                                                                                                          |
+| super-sync-server     | `npm --prefix packages/super-sync-server run build` and `npm --prefix packages/super-sync-server test` (pretest generates Prisma client; see [setup](super-sync-server/README.md))      |
+| personal-planner-core | `npm --prefix packages/personal-planner-core test`; format MJS/declarations; Angular build checks consuming declarations                                                                |
+| plugin-api            | `npm --prefix packages/plugin-api run typecheck`; `npm run plugin-api:build` when consumers need updated declarations                                                                   |
+| vite-plugin           | `npm run vite-plugin:build`                                                                                                                                                             |
+| plugin-dev            | `npm --prefix packages/plugin-dev ci` once (its own workspace and lockfile), then the affected plugin's scripts via `npm --prefix packages/plugin-dev/<name> run <script>`; checks vary |
 
 Root `npm test` covers sync-core, shared-schema, and sync-providers, release
 tooling, and Angular specs. It does **not** run the server, Electron, every
@@ -55,3 +57,22 @@ For a new plugin, follow the [plugin development guide](../docs/plugin-developme
 and the chosen example's manifest/build conventions; discovery does not require
 adding a hard-coded entry to the build script. For standalone sync packages,
 follow [package boundaries](../docs/sync-and-op-log/package-boundaries.md).
+
+Iframe plugins that bundle their JavaScript, styles and translations into
+`index.html` may declare their complete public asset list in `package.json`:
+
+```json
+{
+  "superProductivity": {
+    "pluginAssets": ["manifest.json", "index.html", "LICENSE", "NOTICE"]
+  }
+}
+```
+
+This explicit allowlist replaces inferred `plugin.js`, icon and translation
+assets and limits copying even when `dist/` contains other files. Every declared
+file remains required; malformed paths or missing outputs fail the build. Plugins
+without this field retain the existing full-dist and manifest-derived behavior.
+Mi planificación uses this option because it is a self-contained iframe: adding
+unused runtime files would misrepresent its loading contract. Check the copier
+with `node --test packages/build-packages.test.cjs`.

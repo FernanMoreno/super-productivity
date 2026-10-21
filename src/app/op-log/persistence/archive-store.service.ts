@@ -53,6 +53,27 @@ interface ArchiveDBSchema {
   providedIn: 'root',
 })
 export class ArchiveStoreService {
+  // Invalidates local proposal guards before a write starts and when it settles.
+  // A failed write also invalidates the snapshot conservatively.
+  private _mutationVersion = 0;
+  private _mutationPending = 0;
+  get mutationVersion(): number {
+    return this._mutationVersion;
+  }
+  get mutationPending(): boolean {
+    return this._mutationPending > 0;
+  }
+  private async _mutate<T>(work: () => Promise<T>): Promise<T> {
+    this._mutationVersion++;
+    this._mutationPending++;
+    try {
+      return await work();
+    } finally {
+      this._mutationPending--;
+      this._mutationVersion++;
+    }
+  }
+
   private _db?: IDBPDatabase<ArchiveDBSchema>;
   private _initPromise?: Promise<void>;
   // Archive reads/writes route through this adapter, which operates on this
@@ -234,7 +255,7 @@ export class ArchiveStoreService {
   }
 
   async saveArchiveYoung(data: ArchiveModel): Promise<void> {
-    return this._saveToStore(STORE_NAMES.ARCHIVE_YOUNG, data);
+    return this._mutate(() => this._saveToStore(STORE_NAMES.ARCHIVE_YOUNG, data));
   }
 
   async loadArchiveOld(): Promise<ArchiveModel | undefined> {
@@ -242,7 +263,7 @@ export class ArchiveStoreService {
   }
 
   async saveArchiveOld(data: ArchiveModel): Promise<void> {
-    return this._saveToStore(STORE_NAMES.ARCHIVE_OLD, data);
+    return this._mutate(() => this._saveToStore(STORE_NAMES.ARCHIVE_OLD, data));
   }
 
   async hasArchiveYoung(): Promise<boolean> {
@@ -266,26 +287,28 @@ export class ArchiveStoreService {
     archiveYoung: ArchiveModel,
     archiveOld: ArchiveModel,
   ): Promise<void> {
-    return this._withRetryOnClose(async () => {
-      await this._ensureInit();
-      const now = Date.now();
-      await this._adapter.transaction(
-        [STORE_NAMES.ARCHIVE_YOUNG, STORE_NAMES.ARCHIVE_OLD],
-        'readwrite',
-        async (tx) => {
-          await tx.put(STORE_NAMES.ARCHIVE_YOUNG, {
-            id: SINGLETON_KEY,
-            data: archiveYoung,
-            lastModified: now,
-          });
-          await tx.put(STORE_NAMES.ARCHIVE_OLD, {
-            id: SINGLETON_KEY,
-            data: archiveOld,
-            lastModified: now,
-          });
-        },
-      );
-    });
+    return this._mutate(() =>
+      this._withRetryOnClose(async () => {
+        await this._ensureInit();
+        const now = Date.now();
+        await this._adapter.transaction(
+          [STORE_NAMES.ARCHIVE_YOUNG, STORE_NAMES.ARCHIVE_OLD],
+          'readwrite',
+          async (tx) => {
+            await tx.put(STORE_NAMES.ARCHIVE_YOUNG, {
+              id: SINGLETON_KEY,
+              data: archiveYoung,
+              lastModified: now,
+            });
+            await tx.put(STORE_NAMES.ARCHIVE_OLD, {
+              id: SINGLETON_KEY,
+              data: archiveOld,
+              lastModified: now,
+            });
+          },
+        );
+      }),
+    );
   }
 
   /**
@@ -293,16 +316,18 @@ export class ArchiveStoreService {
    * @internal
    */
   async _clearAllDataForTesting(): Promise<void> {
-    return this._withRetryOnClose(async () => {
-      await this._ensureInit();
-      await this._adapter.transaction(
-        [STORE_NAMES.ARCHIVE_YOUNG, STORE_NAMES.ARCHIVE_OLD],
-        'readwrite',
-        async (tx) => {
-          await tx.clear(STORE_NAMES.ARCHIVE_YOUNG);
-          await tx.clear(STORE_NAMES.ARCHIVE_OLD);
-        },
-      );
-    });
+    return this._mutate(() =>
+      this._withRetryOnClose(async () => {
+        await this._ensureInit();
+        await this._adapter.transaction(
+          [STORE_NAMES.ARCHIVE_YOUNG, STORE_NAMES.ARCHIVE_OLD],
+          'readwrite',
+          async (tx) => {
+            await tx.clear(STORE_NAMES.ARCHIVE_YOUNG);
+            await tx.clear(STORE_NAMES.ARCHIVE_OLD);
+          },
+        );
+      }),
+    );
   }
 }

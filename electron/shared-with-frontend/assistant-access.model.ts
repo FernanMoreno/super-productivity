@@ -10,6 +10,11 @@ export const ASSISTANT_ACCESS_SCOPES = [
   'tasks:read',
   'tasks:read_notes',
   'tasks:capture',
+  'planner:read',
+  'planner:write',
+  'tasks:read_history',
+  'tasks:write',
+  'time:write',
 ] as const;
 
 export type AssistantAccessScope = (typeof ASSISTANT_ACCESS_SCOPES)[number];
@@ -35,6 +40,9 @@ export interface AssistantAccessCredentialResult {
  * it is not reachable through the REST API.
  */
 export const ASSISTANT_CAPTURE_PATH = '/assistant/capture';
+
+/** Main-authenticated planner commands; never exposed by plain REST. */
+export const ASSISTANT_PLANNER_PATH = '/assistant/planner';
 
 // A capture waits for the op to reach IndexedDB, which can take longer than the
 // REST API's 15s budget when many writes are queued.

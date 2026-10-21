@@ -166,7 +166,7 @@
     "lint:file": "ng lint --lint-file-patterns",
     "test:affected": "node tools/test-affected.js",
     "test:file": "cross-env TZ='Europe/Berlin' ng test --watch=false --include",
-    "test:electron": "node --test electron/*.test.cjs",
+    "test:electron": "node --test electron/*.test.cjs electron/mcp/*.test.cjs",
     "test:fast": "cross-env TZ='Europe/Berlin' NODE_OPTIONS='--max-old-space-size=4096' ng test --watch=false --no-code-coverage --source-map=false",
     "test:fast:watch": "cross-env TZ='Europe/Berlin' NODE_OPTIONS='--max-old-space-size=4096' ng test --browsers ChromeHeadless --no-code-coverage --source-map=false",
     "test:shard:features": "cross-env TZ='Europe/Berlin' ng test --watch=false --include='src/app/features/**/*.spec.ts'",

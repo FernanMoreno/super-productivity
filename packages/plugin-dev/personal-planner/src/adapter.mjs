@@ -1,6 +1,6 @@
-import { emptyProfile, validateProfile, migrateProfile } from './model.mjs';
+import { validateProfile } from './model.mjs';
+import { createPlannerOperations } from '../../../personal-planner-core/operations.mjs';
 import { taskSnapshot } from './metrics.mjs';
-const KEY = 'profile-v1';
 export function createAdapter(api) {
   if (!api)
     throw new Error(
@@ -22,33 +22,71 @@ export function createAdapter(api) {
       clearTimeout(timer);
     }
   };
-  return {
-    async load() {
-      let raw;
-      try {
-        raw = await call('loadSyncedData', [KEY]);
-      } catch {
-        throw new Error(
-          'No se puede cargar el perfil. Revisa acceso a datos y reintenta.',
-        );
-      }
-      if (raw === null) return emptyProfile();
-      let p;
-      try {
-        p = JSON.parse(raw);
-      } catch {
-        throw new Error('El perfil guardado no es JSON válido. No se ha reemplazado.');
-      }
-      return migrateProfile(p);
+  let knownRevision;
+  const operations = createPlannerOperations({
+    read: (key) => call('loadSyncedData', [key]),
+    cas: (key, expected, value) =>
+      call('compareAndSwapSyncedData', [expected, value, key]),
+    snapshot: (profile) => adapter.snapshot(profile.timezone, profile.weekStartsOn),
+    native: async () => {
+      throw Error('Usa los controles nativos para tareas y tiempo.');
     },
-    async save(p) {
-      validateProfile(p);
+  });
+  const adapter = {
+    async loadState() {
       try {
-        await call('persistDataSynced', [JSON.stringify(p), KEY]);
-      } catch {
+        const state = await operations.activities();
+        knownRevision = state.revision;
+        return state;
+      } catch (error) {
         throw new Error(
-          'No se pudo guardar. Los cambios no están confirmados; conserva el formulario y reintenta.',
+          'No se puede cargar el perfil. Revisa acceso a datos, versión y formato del perfil; no se ha reemplazado.',
         );
+      }
+    },
+    async load() {
+      return (await adapter.loadState()).profile;
+    },
+    async save(profile, { baseRevision, operationId = crypto.randomUUID() } = {}) {
+      validateProfile(profile);
+      if (typeof api.compareAndSwapSyncedData !== 'function')
+        throw Error(
+          'API no compatible: falta compareAndSwapSyncedData. Actualiza la aplicación para guardar con protección de revisión.',
+        );
+      if (baseRevision === undefined)
+        baseRevision = knownRevision ?? (await adapter.loadState()).revision;
+      const result = await operations.edit({
+        baseRevision,
+        operationId,
+        command: { type: 'profile.replace', payload: profile },
+      });
+      if (result.status === 'applied') {
+        knownRevision = result.revision;
+        return result;
+      }
+      const message =
+        result.status === 'conflict'
+          ? 'La configuración cambió fuera de este formulario. Conserva tus cambios y carga la configuración actual antes de volver a guardarlos.'
+          : result.message ||
+            'No se pudo guardar con confirmación durable. Conserva el formulario y el identificador de operación; no repitas la modificación con otro identificador.';
+      const error = Object.assign(new Error(message), {
+        code: result.code || 'OUTCOME_UNKNOWN',
+        operationId,
+        result,
+      });
+      throw error;
+    },
+    watch(onChange) {
+      if (typeof api.registerHook !== 'function') return;
+      // Receipt keys emit the same hook; the UI compares profile revisions before rendering.
+      try {
+        Promise.resolve(
+          api.registerHook('persistedDataChanged', () => onChange(false)),
+        ).catch(() => {});
+        for (const hook of ['anyTaskUpdate', 'currentTaskChange', 'projectListUpdate'])
+          Promise.resolve(api.registerHook(hook, () => onChange(true))).catch(() => {});
+      } catch {
+        /* Polling still reloads external changes. */
       }
     },
     async snapshot(timezone = 'Europe/Madrid', weekStartsOn = 1) {
@@ -106,4 +144,5 @@ export function createAdapter(api) {
       await call('selectTask', [id]);
     },
   };
+  return adapter;
 }

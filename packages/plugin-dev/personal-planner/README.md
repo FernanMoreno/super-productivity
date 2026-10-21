@@ -2,13 +2,15 @@
 
 Plugin general de planificación y seguimiento para Super Productivity. Permite configurar actividades, compromisos, disponibilidad y objetivos que cambian con el tiempo. Empieza vacío; los horarios y nombres pertenecen a los datos del usuario, no a la lógica del producto.
 
-Sin backend, servicios de pago ni dependencias de ejecución. Reutiliza tareas, proyectos, etiquetas, registros y temporizador nativos. Incluye una corrección mínima del núcleo para que la confirmación de guardado espere la escritura durable; la planificación se implementa en el plugin.
+Sin backend, servicios de pago ni dependencias de ejecución. Reutiliza tareas, proyectos, etiquetas, registros y temporizador nativos. La versión 0.3.0 comparte el motor de planificación con el MCP nativo del fork y añade comparación de revisiones al guardado durable. No crea otra fuente de tareas o registros.
 
 ## Instalación
 
-Base comprobada: **Super Productivity 19.2.0**, commit `78139c531c808bab7c46ef96fd0fbb0a3b6f7d6d`. Resultados y límites de validación: [VALIDACION.md](VALIDACION.md).
+Base comprobada: **Super Productivity 19.2.0**, commit `78139c531c808bab7c46ef96fd0fbb0a3b6f7d6d`. Resultados y límites de validación: [VALIDACION-MCP.md](VALIDACION-MCP.md).
 
-El ZIP se importa con la API de 19.2.0, pero la garantía de guardado al recargar inmediatamente requiere **este fork con su corrección de persistencia**. La versión original confirma algunas escrituras todavía en memoria. Para usar la adaptación completa, ejecuta el fork siguiendo Desarrollo o instala una compilación de este fork; después importa el plugin. Se entrega además un paquete web local del fork corregido; no es un instalador de escritorio.
+El plugin **0.3.0 requiere este fork con `compareAndSwapSyncedData`**. El número 19.2.0 por sí solo no basta: la publicación original no contiene el MCP nativo de la base de desarrollo inspeccionada. El ZIP añade el panel; las herramientas MCP requieren además el anfitrión Electron compilado con esta adaptación. El paquete web anterior 0.2.0 no contiene esa integración.
+
+Conexión desde Codex, Claude Code, OpenCode y Claude Desktop: [guía de clientes](../../../docs/planner-mcp-clients.md). Herramientas, parámetros, permisos y límites: [contrato MCP](../../../docs/planner-mcp.md). Activa el acceso del asistente y sus permisos en Ajustes de Electron; REST conserva su clave independiente.
 
 1. Genera u obtén `dist/personal-planner.zip`.
 2. En Super Productivity abre **Ajustes > Plugins**, selecciona el ZIP y acepta el aviso de instalación de la aplicación. Mantén el plugin activado.
@@ -76,9 +78,9 @@ Las propuestas respetan prioridad, vigencia, fecha límite, días y ventanas con
 
 ## Persistencia, migración y privacidad
 
-El puente del fork espera el lote coalescido y el flush del op-log; rechaza cancelaciones y fallos durables. Si se están aplicando cambios de sincronización remota, el guardado se rechaza para reintentar al finalizar; no se confirma un buffer en memoria. No se añaden campos de sync ni otra base de datos. El perfil se guarda como datos del usuario mediante `persistDataSynced` y `loadSyncedData`. La clave `profile-v1` conserva su nombre por compatibilidad; el contenido actual usa `schemaVersion: 2`. Los perfiles anteriores se migran al leer o importar, preservando identificadores, asociaciones, objetivos y horarios. La migración no escribe hasta un guardado del usuario. Versiones desconocidas o JSON inválido se rechazan sin reemplazar datos.
+El guardado con revisión del fork compara el perfil antes de despachar y espera el flush del op-log; rechaza cancelaciones y fallos durables. Si se están aplicando cambios de sincronización remota, el guardado se rechaza para reintentar al finalizar; no se confirma un buffer en memoria. No se añaden campos de sync ni otra base de datos. El perfil se guarda como datos del usuario mediante `compareAndSwapSyncedData` y `loadSyncedData`. La clave `profile-v1` conserva su nombre por compatibilidad; el contenido actual usa `schemaVersion: 2`. Los perfiles anteriores se migran al leer o importar, preservando identificadores, asociaciones, objetivos y horarios. La migración no escribe hasta un guardado del usuario. Versiones desconocidas o JSON inválido se rechazan sin reemplazar datos.
 
-Exporta una copia privada antes de importar otro perfil o desinstalar. Importar reemplaza solamente la configuración del plugin. El almacenamiento del anfitrión usa última escritura por clave: evita editar el perfil simultáneamente desde varios dispositivos. Sus datos pueden entrar en sincronización, copias y exportaciones de Super Productivity.
+Exporta una copia privada antes de importar otro perfil o desinstalar. Importar reemplaza solamente la configuración del plugin; conserva los recibos `op-*` de operaciones. Los borradores abiertos rechazan revisiones obsoletas y no se sobrescriben por cambios del asistente. El almacenamiento del anfitrión usa última escritura por clave: evita editar el perfil simultáneamente desde varios dispositivos. Sus datos pueden entrar en sincronización, copias y exportaciones de Super Productivity.
 
 El ZIP incluye solo manifiesto, interfaz, licencia y créditos. Nunca incluye perfiles, tareas, capturas ni fixtures. El plugin no hace llamadas de red.
 

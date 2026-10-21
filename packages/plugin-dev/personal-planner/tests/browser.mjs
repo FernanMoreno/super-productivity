@@ -63,11 +63,17 @@ try {
         getAppState: async () => ({
           globalConfig: { misc: { startOfNextDayTime: '00:00' } },
         }),
-        loadSyncedData: async () =>
-          localStorage.getItem('planner') || JSON.stringify(profile),
-        persistDataSynced: async (v) => {
+        loadSyncedData: async (key) =>
+          localStorage.getItem(key === 'profile-v1' ? 'planner' : 'planner-' + key) ||
+          (key === 'profile-v1' ? JSON.stringify(profile) : null),
+        compareAndSwapSyncedData: async (expected, value, key) => {
           if (localStorage.getItem('fail-save')) throw Error('denied');
-          localStorage.setItem('planner', v);
+          if ((await window.PluginAPI.loadSyncedData(key)) !== expected) return false;
+          localStorage.setItem(
+            key === 'profile-v1' ? 'planner' : 'planner-' + key,
+            value,
+          );
+          return true;
         },
         selectTask: async (id) => {
           window.selected = id;
@@ -138,7 +144,7 @@ try {
     .getByRole('button', { name: 'Guardar Idioma ficticio', exact: true })
     .click();
   await page.locator('#error:not([hidden])').waitFor();
-  assert.match(await page.locator('#error').innerText(), /No se pudo guardar/);
+  assert.match(await page.locator('#error').innerText(), /No se pudo|confirmación/);
   assert.equal(await area.locator('[name="dailyMinutes"]').inputValue(), '70');
   await page.evaluate(() => {
     localStorage.removeItem('fail-save');

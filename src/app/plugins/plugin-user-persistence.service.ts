@@ -1,5 +1,6 @@
 import { getIsApplyingRemoteOps } from '../op-log/capture/operation-capture.meta-reducer';
-import { inject, Injectable } from '@angular/core';
+import { flushPluginWrites, assertPluginWritesHealthy } from './plugin-persistence-api';
+import { inject, Injectable, Injector } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { firstValueFrom } from 'rxjs';
 import {
@@ -35,6 +36,8 @@ import { PluginLog } from '../core/log';
 })
 export class PluginUserPersistenceService {
   private _store = inject(Store);
+  private _injector = inject(Injector);
+  private _casChains = new Map<string, Promise<unknown>>();
 
   /**
    * Track the last *committed* persist time per entity id, for rate limiting.
@@ -84,6 +87,59 @@ export class PluginUserPersistenceService {
    * silently undone by the resurrecting upsert that lands afterwards.
    */
   private _commitGeneration = new Map<string, number>();
+
+  /** Compare at dispatch time; serialize cooperating writers in this renderer.
+   * Remote writes during compression invalidate the comparison. No distributed CAS.
+   * CAS writes represent separate user intents and are not rate-limit coalesced.
+   */
+  async compareAndSwapPluginUserData(
+    entityId: string,
+    expected: string | null,
+    data: string,
+    beforeCommit?: () => Promise<void>,
+    atDispatch?: () => void,
+  ): Promise<boolean> {
+    if (new Blob([data]).size > MAX_PLUGIN_DATA_SIZE)
+      throw new Error('Plugin data exceeds maximum size');
+    const generation = this._commitGeneration.get(entityId) ?? 0;
+    const previous = this._casChains.get(entityId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await beforeCommit?.();
+        if (this._pendingData.has(entityId)) await this._flushPendingData(entityId);
+        await this._commitChain.get(entityId);
+        const readState = this._store.selectSignal(selectPluginUserDataFeatureState);
+        const stored = readState().find((item) => item.id === entityId)?.data ?? null;
+        const raw = stored === null ? null : await decodeFromPersist(stored);
+        if (raw !== expected) return false;
+        const encoded = await encodeForPersist(data);
+        await beforeCommit?.();
+        if ((this._commitGeneration.get(entityId) ?? 0) !== generation)
+          throw new Error('Plugin data save cancelled by removal');
+        assertPluginWritesHealthy(this._injector);
+        if (getIsApplyingRemoteOps())
+          throw new Error(
+            'Plugin data save deferred by sync; retry after sync completes',
+          );
+        if (
+          readState().find((item) => item.id === entityId)?.data !== (stored ?? undefined)
+        )
+          return false;
+        atDispatch?.();
+        this._store.dispatch(
+          upsertPluginUserData({ pluginUserData: { id: entityId, data: encoded } }),
+        );
+        await flushPluginWrites(this._injector);
+        return true;
+      });
+    this._casChains.set(entityId, next);
+    const cleanup = (): void => {
+      if (this._casChains.get(entityId) === next) this._casChains.delete(entityId);
+    };
+    void next.then(cleanup, cleanup);
+    return next;
+  }
 
   /**
    * Persist user data for a specific entity (called by plugin via
@@ -344,8 +400,9 @@ export class PluginUserPersistenceService {
    * Maps directly because an entity whose first persist is mid-compress
    * is not yet in NgRx state.
    */
-  private _cancelPendingForPlugin(pluginId: string): void {
+  private _cancelPendingForPlugin(pluginId?: string): void {
     const candidateIds = new Set<string>();
+    for (const id of this._casChains.keys()) candidateIds.add(id);
     for (const id of this._lastPersistTime.keys()) candidateIds.add(id);
     for (const id of this._pendingData.keys()) candidateIds.add(id);
     for (const id of this._flushTimers.keys()) candidateIds.add(id);
@@ -353,7 +410,7 @@ export class PluginUserPersistenceService {
     for (const id of this._commitChain.keys()) candidateIds.add(id);
     for (const id of this._commitGeneration.keys()) candidateIds.add(id);
     for (const id of candidateIds) {
-      if (isPluginIdMatch(id, pluginId)) {
+      if (pluginId === undefined || isPluginIdMatch(id, pluginId)) {
         this._cancelPending(id);
       }
     }
@@ -367,6 +424,7 @@ export class PluginUserPersistenceService {
    * state without a microtask break.
    */
   async clearAllPluginUserData(): Promise<void> {
+    this._cancelPendingForPlugin();
     const currentState = await firstValueFrom(
       this._store.select(selectPluginUserDataFeatureState),
     );

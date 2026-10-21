@@ -33,6 +33,32 @@ async function pathExists(p) {
   }
 }
 
+// Packages with a self-contained iframe can declare their complete public assets.
+// This is an explicit copy allowlist, not permission to omit missing outputs.
+function pluginAssets(packageJson) {
+  const files = packageJson.superProductivity?.pluginAssets;
+  if (files === undefined) return undefined;
+  const valid =
+    Array.isArray(files) &&
+    files.length > 0 &&
+    new Set(files).size === files.length &&
+    files.includes('manifest.json') &&
+    files.every(
+      (file) =>
+        typeof file === 'string' &&
+        /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(file) &&
+        file.split('/').every((part) => part !== '.' && part !== '..'),
+    );
+  if (!valid)
+    throw Object.assign(
+      new Error(
+        'superProductivity.pluginAssets must be a nonempty list of unique relative asset paths including manifest.json.',
+      ),
+      { code: 'INVALID_PLUGIN_ASSETS' },
+    );
+  return [...files];
+}
+
 async function getPlugins() {
   const pluginDevDir = path.join(__dirname, 'plugin-dev');
   const entries = await fs.readdir(pluginDevDir, { withFileTypes: true });
@@ -105,7 +131,8 @@ async function getPlugins() {
           buildScript && !buildScript.includes("echo 'No build needed");
 
         // Read manifest.json to check for additional files (e.g., config schema)
-        const files = ['manifest.json', 'plugin.js', 'icon.svg'];
+        const explicitAssets = pluginAssets(packageJson);
+        const files = explicitAssets || ['manifest.json', 'plugin.js', 'icon.svg'];
         const requiredFiles = [...files];
         // manifest.json may live at the root or inside src/
         const manifestCandidates = [
@@ -117,15 +144,15 @@ async function getPlugins() {
           try {
             const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
             manifestRead = true;
-            if (manifest.iFrame !== false) {
+            if (!explicitAssets && manifest.iFrame !== false) {
               files.push('index.html');
               requiredFiles.push('index.html');
             }
-            if (manifest.jsonSchemaCfg) {
+            if (!explicitAssets && manifest.jsonSchemaCfg) {
               files.push(manifest.jsonSchemaCfg);
               requiredFiles.push(manifest.jsonSchemaCfg);
             }
-            if (manifest.i18n?.languages) {
+            if (!explicitAssets && manifest.i18n?.languages) {
               for (const lang of manifest.i18n.languages) {
                 requiredFiles.push(`i18n/${lang}.json`);
               }
@@ -135,7 +162,7 @@ async function getPlugins() {
             // Try next candidate
           }
         }
-        if (!manifestRead) {
+        if (!manifestRead && !explicitAssets) {
           // No manifest.json found — assume index.html is needed
           files.push('index.html');
           requiredFiles.push('index.html');
@@ -147,9 +174,11 @@ async function getPlugins() {
           buildCommand: hasRealBuildScript ? 'npm run build' : undefined,
           files,
           requiredFiles,
+          explicitAssets: !!explicitAssets,
           sourcePath: hasRealBuildScript ? 'dist' : undefined,
         });
       } catch (e) {
+        if (e.code === 'INVALID_PLUGIN_ASSETS') throw e;
         // Not a package, skip
       }
     }
@@ -220,7 +249,7 @@ async function buildPlugin(plugin) {
       const requiredFiles = plugin.requiredFiles || filesToCopy;
       const missingFiles = [];
 
-      if (distExists) {
+      if (distExists && !plugin.explicitAssets) {
         // Copy the full dist to preserve all chunks/assets
         await fs.cp(sourcePath, targetDir, { recursive: true });
       } else {
@@ -229,6 +258,7 @@ async function buildPlugin(plugin) {
           const src = path.join(sourcePath, file);
           const dest = path.join(targetDir, file);
           try {
+            await ensureDir(path.dirname(dest));
             if (!(await copyFile(src, dest))) {
               missingFiles.push(file);
             }
@@ -239,7 +269,7 @@ async function buildPlugin(plugin) {
 
         // Copy i18n directory if it exists
         const i18nSrc = path.join(sourcePath, 'i18n');
-        if (await pathExists(i18nSrc)) {
+        if (!plugin.explicitAssets && (await pathExists(i18nSrc))) {
           const i18nDest = path.join(targetDir, 'i18n');
           await fs.cp(i18nSrc, i18nDest, { recursive: true });
         }
@@ -259,7 +289,7 @@ async function buildPlugin(plugin) {
         );
       }
 
-      if (distExists) {
+      if (distExists && !plugin.explicitAssets) {
         log(`  ✅ Copied dist to assets (${plugin.name})`, colors.green);
       } else {
         log(
@@ -333,4 +363,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildAll };
+module.exports = { buildAll, buildPlugin, pluginAssets };

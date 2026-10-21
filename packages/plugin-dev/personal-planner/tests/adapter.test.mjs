@@ -12,7 +12,7 @@ test('avisos informativos del archivo no invalidan días con datos conocidos', a
   );
 });
 function api() {
-  let stored = null;
+  const stored = new Map();
   return {
     getTasks: async () => [],
     getArchivedTasks: async () => [],
@@ -21,9 +21,14 @@ function api() {
     getAppState: async () => ({
       globalConfig: { misc: { startOfNextDayTime: '00:00' } },
     }),
-    loadSyncedData: async () => stored,
-    persistDataSynced: async (v) => {
-      stored = v;
+    loadSyncedData: async (key) => stored.get(key) ?? null,
+    compareAndSwapSyncedData: async (expected, value, key) => {
+      if ((stored.get(key) ?? null) !== expected) return false;
+      stored.set(key, value);
+      return true;
+    },
+    persistDataSynced: async () => {
+      throw Error('Legacy writes must not be used');
     },
   };
 }
@@ -38,12 +43,12 @@ test('persistencia usa string y carga al crear nuevo panel', async () => {
 test('fallo de guardado no se anuncia como éxito y perfil inválido no escribe', async () => {
   const a = api();
   let calls = 0;
-  a.persistDataSynced = async () => {
+  a.compareAndSwapSyncedData = async () => {
     calls++;
     throw Error('denied');
   };
   const b = createAdapter(a);
-  await assert.rejects(b.save(emptyProfile()), /guardar/);
+  await assert.rejects(b.save(emptyProfile()), /guardar|confirmación/);
   await assert.rejects(b.save({ ...emptyProfile(), schemaVersion: 7 }), /Versión/);
   assert.equal(calls, 1);
 });
@@ -79,4 +84,66 @@ test('archivo rechazado hace explícita la falta de desglose completo', async ()
     areaMetrics(s, { projectIds: [], tagIds: [] }, '2027-02-01').dailyMinutes,
     null,
   );
+});
+
+test('CAS rechaza perfil obsoleto y recibos no reemplazan profile-v1', async () => {
+  const native = api(),
+    first = createAdapter(native),
+    second = createAdapter(native);
+  const a = await first.loadState(),
+    b = await second.loadState();
+  const candidate = emptyProfile();
+  candidate.areas = [createArea('Actual', 'current')];
+  await first.save(candidate, {
+    baseRevision: a.revision,
+    operationId: 'test_operation_one',
+  });
+  await assert.rejects(
+    second.save(emptyProfile(), {
+      baseRevision: b.revision,
+      operationId: 'test_operation_two',
+    }),
+    (e) => e.code === 'STALE_DATA',
+  );
+  assert.equal((await first.load()).areas[0].name, 'Actual');
+  assert.equal(
+    JSON.parse(await native.loadSyncedData('op-test_operation_one')).result.status,
+    'applied',
+  );
+});
+test('repetir guardado con operationId devuelve mismo recibo sin segunda modificación', async () => {
+  const native = api(),
+    adapter = createAdapter(native),
+    state = await adapter.loadState(),
+    candidate = emptyProfile();
+  const args = { baseRevision: state.revision, operationId: 'test_repeated_operation' };
+  const first = await adapter.save(candidate, args),
+    second = await adapter.save(candidate, args);
+  assert.equal(first.status, 'applied');
+  assert.equal(second.replayed, true);
+});
+test('anfitrión sin CAS no degrada a escritura no protegida', async () => {
+  const native = api();
+  delete native.compareAndSwapSyncedData;
+  let writes = 0;
+  native.persistDataSynced = () => {
+    writes++;
+  };
+  await assert.rejects(
+    createAdapter(native).save(emptyProfile()),
+    /compareAndSwapSyncedData|actualiza|compatible/,
+  );
+  assert.equal(writes, 0);
+});
+test('hooks distinguen perfil externo de cambios nativos y no transmiten contenido', () => {
+  const native = api(),
+    handlers = new Map(),
+    seen = [];
+  native.registerHook = (name, handler) => handlers.set(name, handler);
+  createAdapter(native).watch((value) => seen.push(value));
+  handlers.get('persistedDataChanged')();
+  handlers.get('anyTaskUpdate')({ title: 'Contenido ficticio' });
+  handlers.get('currentTaskChange')();
+  handlers.get('projectListUpdate')();
+  assert.deepEqual(seen, [false, true, true, true]);
 });

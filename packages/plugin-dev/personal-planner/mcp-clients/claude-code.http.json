@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "super-productivity": {
+      "type": "http",
+      "url": "http://127.0.0.1:3876/mcp",
+      "headers": { "Authorization": "Bearer ${SP_ACCESS_KEY}" }
+    }
+  }
+}
