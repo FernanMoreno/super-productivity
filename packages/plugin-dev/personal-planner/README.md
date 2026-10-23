@@ -2,13 +2,13 @@
 
 Plugin general de planificación y seguimiento para Super Productivity. Permite configurar actividades, compromisos, disponibilidad y objetivos que cambian con el tiempo. Empieza vacío; los horarios y nombres pertenecen a los datos del usuario, no a la lógica del producto.
 
-Sin backend, servicios de pago ni dependencias de ejecución. Reutiliza tareas, proyectos, etiquetas, registros y temporizador nativos. La versión 0.4.0 comparte el motor de planificación con el MCP nativo del fork y añade comparación de revisiones al guardado durable. No crea otra fuente de tareas o registros.
+Sin backend, servicios de pago ni dependencias de ejecución. Reutiliza tareas, proyectos, etiquetas, registros y temporizador nativos. La versión 0.5.0 comparte el motor de planificación con el MCP nativo del fork y añade comparación de revisiones al guardado durable. No crea otra fuente de tareas o registros.
 
 ## Instalación
 
-Base comprobada: **Super Productivity 19.2.0**, commit `78139c531c808bab7c46ef96fd0fbb0a3b6f7d6d`. Resultados actuales: [VALIDACION-LIMITES.md](VALIDACION-LIMITES.md). Validación anterior: [VALIDACION-MCP.md](VALIDACION-MCP.md).
+Base comprobada: **Super Productivity 19.2.0**, commit `78139c531c808bab7c46ef96fd0fbb0a3b6f7d6d`. Base local de esta ampliación: `ff317dd24420e5a46f9ca570daa6fd18089effa7`. Resultados de la entrega actual: [VALIDACION-0.5.md](VALIDACION-0.5.md). Las validaciones 0.4 y anteriores no prueban automáticamente los cambios 0.5.
 
-El plugin **0.4.0 requiere este fork con `compareAndSwapSyncedData` y `plannerOperation`**. El número 19.2.0 por sí solo no basta: la publicación original no contiene el MCP nativo de la base de desarrollo inspeccionada. El ZIP añade el panel; las herramientas MCP requieren además el anfitrión Electron compilado con esta adaptación. El paquete web anterior 0.2.0 no contiene esa integración.
+El plugin **0.5.0 requiere este fork con `compareAndSwapSyncedData` y `plannerOperation`**. El número 19.2.0 por sí solo no basta: la publicación original no contiene el MCP nativo de la base de desarrollo inspeccionada. El ZIP añade el panel; las herramientas MCP requieren además el anfitrión Electron compilado con esta adaptación. El paquete web anterior 0.2.0 no contiene esa integración.
 
 Conexión desde Codex, Claude Code, OpenCode y Claude Desktop: [guía de clientes](../../../docs/planner-mcp-clients.md). Herramientas, parámetros, permisos y límites: [contrato MCP](../../../docs/planner-mcp.md). Activa el acceso del asistente y sus permisos en Ajustes de Electron; REST conserva su clave independiente.
 
@@ -16,16 +16,41 @@ Conexión desde Codex, Claude Code, OpenCode y Claude Desktop: [guía de cliente
 2. En Super Productivity abre **Ajustes > Plugins**, selecciona el ZIP y acepta el aviso de instalación de la aplicación. Mantén el plugin activado.
 3. Abre **Mi planificación** en el menú lateral; la ruta es `#/plugins/personal-planner/index`.
 4. Crea la primera actividad desde Configuración. También puedes cargar una demostración ficticia opcional o importar un perfil privado JSON.
-5. Selecciona la zona horaria y el primer día de semana. Si lo necesitas, cambia también el idioma del anfitrión a Español en sus ajustes de localización; el plugin siempre está en español.
+5. Selecciona la zona horaria y el primer día de semana. Si lo necesitas, cambia también el idioma del anfitrión a Español en sus ajustes de localización; el plugin utiliza el idioma y las traducciones del anfitrión, con catálogos español e inglés incluidos. Para el recorrido inicial en español selecciona Español en la aplicación.
 6. Vincula actividades a proyectos o etiquetas existentes. Pulsa una tarea del panel para abrir su detalle nativo y usar su temporizador.
 
 La demostración crea solamente configuración ficticia del plugin; no crea tareas ni registros falsos en la aplicación. Un perfil personal preparado para una instalación concreta se entrega fuera del repositorio. No lo copies a Git ni lo publiques. Windows puede acceder a una carpeta privada de WSL mediante `\\wsl.localhost\Ubuntu\home\<usuario>\...`.
 
-## Paquete web local del fork
+## Recorrido básico
 
-Extrae `super-productivity-planner-web.zip` completo. Con Python 3, ejecuta en esa carpeta `python3 -m http.server 4255 --bind 127.0.0.1 --directory web` (en Windows, `python` o `py`, según instalación). Abre `http://localhost:4255` e importa el ZIP incluido desde Ajustes > Plugins. `LEEME-WEB.txt` contiene estos pasos. Es una compilación de desarrollo para uso local; no se ha validado como instalador de escritorio ni despliegue público.
+1. En **Configuración**, crea una actividad ficticia como «Lectura», vincúlala a un proyecto nativo y define un objetivo diario editable.
+2. Configura disponibilidad, jornada si procede y márgenes; marca los datos conocidos o no aplicables. El aviso de disponibilidad parcial permanece mientras falte información.
+3. Crea una tarea nativa con estimación y fecha. Consulta Hoy, Semana y Objetivos. Usa su detalle nativo para iniciar el temporizador o registra una duración desde MCP.
+4. En **Qué hago ahora**, elige contexto y tiempo disponible; consulta hasta tres acciones con motivos. Puedes abrir otra tarea manualmente. Bloquear o pausar una tarea es metadato del planificador, no completarla ni detener silenciosamente su temporizador.
+5. En **Revisión**, consulta la semana e inicia una sesión. Revisa asuntos, guarda decisiones y vuelve después: el progreso persiste. «Revisado», tarea realizada y minutos registrados son hechos distintos.
+6. En la tabla semanal compara previsto con registrado; introduce el total real de minutos para una tarea hoja activa. Se comprueba el valor anterior y se usa el servicio nativo. Cero elimina su duración de ese día; no se inventa una hora de inicio. Para tareas archivadas utiliza el registro nativo.
+7. Prepara una propuesta, ajusta fecha/hora, selecciona y aplica. Consulta **Historial** para conocer antes/después y preparar una reversión; selecciona los cambios compatibles y confirma cualquier conflicto pendiente.
+8. Habilita MCP local y sus permisos en Ajustes; sigue la [guía MCP](../../../docs/planner-mcp-clients.md) para realizar la misma consulta y modificación desde tu asistente. No necesita una API de modelos propia.
 
-El navegador guarda datos por origen: conserva dirección, puerto y navegador, y exporta copias privadas antes de cambiarlos. El paquete comienza sin datos personales. No abras el HTML directamente desde el explorador de archivos.
+El navegador puede utilizar el panel sobre el frontend actualizado del fork, pero el listener MCP requiere Electron abierta. El servidor web antiguo de otra versión no se actualiza importando solo el ZIP: el anfitrión también necesita estas operaciones.
+
+## Revisión, comparación y recuperación
+
+La revisión identifica tareas sin actividad, aplazamientos observados repetidamente, previsiones sin registros, proyectos activos sin próxima acción y metas con datos insuficientes o poco avance. Puedes mantener, reprogramar, dividir, pausar, completar y archivar explícitamente, corregir duración o crear una próxima tarea. Dividir sigue la regla nativa: el primer hijo hereda el historial; no reparte tiempo retroactivamente. La división recurrente se remite a la interfaz nativa para evitar modificar plantillas futuras sin alcance explícito.
+
+El plan previo se captura al iniciar la revisión o antes de aplicar una reorganización. Se conserva la primera observación por día, incluso al cambiar el intervalo consultado. No se presenta una estimación actual como planificación histórica de días anteriores; se indica desconocido. Cambiar posteriormente la zona no reconstruye un baseline comparable.
+
+Cada reorganización tiene identificador durable. Deshacer restaura únicamente los campos de planificación correspondientes: conserva tiempo posterior, completitud, títulos y otros cambios ajenos. Un campo planificado que ya no coincide produce conflicto; se puede seleccionar la parte compatible. La comparación detecta diferencias actuales, no demuestra que nunca haya existido una edición intermedia con el mismo valor final. Una operación parcial o sin confirmación durable conserva resultado incierto.
+
+Si pierdes conexión, reabre el panel y consulta el recibo por su identificador antes de volver a actuar. Los avisos pendientes no reejecutan peticiones. Historial permite inspeccionar una reorganización por ese identificador. No restaures toda la base para deshacer una planificación. Conserva copias privadas usando la exportación/restauración nativa; el JSON del panel exporta sus ajustes, mientras revisiones, recibos e historial adicional forman parte del almacenamiento nativo del usuario.
+
+## Aplicación local empaquetada
+
+La entrega 0.5 incluye `Super-Productivity-Planner-Setup-x64-0.5.0.exe` para Windows y `super-productivity-planner-linux-x64-0.5.0.zip` para Linux. El primero instala un fork con identidad propia; empieza sin importar datos personales. El NSIS no está firmado. La comprobación Windows arranca el ejecutable desempaquetado con perfil sintético, sin ejecutar el instalador sobre un perfil personal.
+
+El ZIP del plugin requiere ese anfitrión compatible. En el primer inicio selecciona **Español** en la localización nativa y activa/importa **Mi planificación** en Plugins. Para migrar tareas e historial usa exportación/restauración nativa; para ajustes del planificador usa su JSON. Haz una copia privada antes de actualizar. Una exportación de ajustes del plugin no sustituye la copia nativa de revisiones, recibos e histórico.
+
+Linux requiere glibc 2.34 o posterior y las bibliotecas habituales de Electron. Si mantienes otra instancia abierta, usa rutas XDG y `--user-data-dir` independientes: el bloqueo de instancia se adquiere antes de aplicar ese argumento. `--no-protocol-registration` evita cambiar asociaciones del sistema. No habilites el listener MCP en dos instancias simultáneas en el mismo puerto.
 
 ## Actividades y objetivos
 
@@ -64,7 +89,7 @@ Las fechas excluidas se refieren al día original de inicio, también en bloques
 
 ## Panel y propuestas
 
-**Hoy** muestra compromisos, tareas previstas, estimaciones, registros en la fecha, objetivos diarios, entregas e incidencias. El selector de fecha permite revisar otras fechas; cada objetivo diario se evalúa por separado. Una tarea prevista se identifica como planificación, no como entrega confirmada; puedes añadir entregas explícitas.
+**Hoy** muestra disponibilidad restante desde el instante actual (o capacidad total si consultas una fecha futura), duraciones de tareas pendientes sin hueco conocido, compromisos, tareas previstas, estimaciones, registros en la fecha, objetivos diarios, entregas e incidencias. El selector de fecha permite revisar otras fechas; cada objetivo diario se evalúa por separado. Una tarea prevista se identifica como planificación, no como entrega confirmada; puedes añadir entregas explícitas.
 
 **Objetivos y progreso** distingue tiempo previsto, tiempo registrado y tareas completadas. Incluye tareas activas y archivadas sin duplicar identificadores ni sumar otra vez los agregados de padres y subtareas.
 
@@ -86,13 +111,13 @@ El guardado con revisión del fork compara el perfil antes de despachar y espera
 
 Exporta una copia privada antes de importar otro perfil o desinstalar. Importar reemplaza solamente la configuración del plugin; conserva los recibos `op-*` de operaciones. Los borradores abiertos rechazan revisiones obsoletas y no se sobrescriben por cambios del asistente. El almacenamiento del anfitrión usa última escritura por clave: evita editar el perfil simultáneamente desde varios dispositivos. Sus datos pueden entrar en sincronización, copias y exportaciones de Super Productivity.
 
-El ZIP incluye solo manifiesto, interfaz, licencia y créditos. Nunca incluye perfiles, tareas, capturas ni fixtures. El plugin no hace llamadas de red.
+El ZIP incluye solo manifiesto, interfaz, traducciones español/inglés, licencia y créditos. Nunca incluye perfiles, tareas, capturas ni fixtures. El plugin no hace llamadas de red.
 
 Límites verificados:
 
 - Las lecturas del perfil y del archivo propagan los errores del anfitrión. Un dato comprimido corrupto no se presenta como perfil vacío; un archivo inaccesible produce métricas incompletas y un aviso.
 - `timeSpentOnDay` contiene agregados por día lógico, sin sesiones originales. Para certificar objetivos por día civil deben coincidir zona del dispositivo y del perfil, con inicio de día del anfitrión a 00:00. Cambiar ajustes no reconstruye registros antiguos.
-- No se proyectan repeticiones nativas futuras aún no creadas ni se importan automáticamente calendarios externos. El cambio de proyecto de una serie se ofrece con alcance explícito; el panel no fabrica instancias futuras.
+- No se proyectan repeticiones nativas futuras aún no creadas. Los eventos externos disponibles se leen de la caché y filtros nativos, se deduplican por proveedor/identidad/alias y vínculo a tarea, y no se copian a compromisos. Referencia, cobertura incompleta, caché y errores se distinguen; consultar el planificador no inicia nuevas peticiones a calendarios. El cambio de proyecto de una serie se ofrece con alcance explícito; el panel no fabrica instancias futuras.
 - Una tarea puede pertenecer a varias actividades no relacionadas. El panel avisa; sus métricas no se deben sumar entre sí. La carga asigna cada tarea una sola vez.
 - Objetivos semanales y acumulados se muestran como métricas; el buscador propone objetivos diarios y estimaciones flexibles, sin optimizador global ni modificaciones silenciosas.
 
@@ -119,3 +144,9 @@ Para actualizar, exporta el perfil, instala el nuevo ZIP con el mismo identifica
 ## Licencia y créditos
 
 Adaptación mediante plugin de [Super Productivity](https://github.com/super-productivity/super-productivity), de Johannes Millan y sus colaboradores. Se conserva su licencia MIT y se incluye el LICENSE original en el ZIP. No se publica una release ni una PR contra el proyecto original.
+
+## Alcance local y ampliaciones posteriores
+
+Esta ampliación se entrega en una rama y paquetes locales. No publica repositorios, PR, releases ni servicios remotos. Conserva MIT y créditos originales. Requiere la misma instancia Electron para los asistentes locales; cada credencial y capacidad REST/MCP sigue separada.
+
+Quedan como ampliaciones: límites WIP, dependencias completas, estimaciones sugeridas por historial comparable, integración opcional ActivityWatch, plantillas temporales y acceso MCP remoto. No hay infraestructura anticipada para ellas.

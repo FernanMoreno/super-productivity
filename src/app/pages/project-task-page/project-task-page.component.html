@@ -1,3 +1,9 @@
+@if (currentProject()?.id && currentProject()?.id !== 'INBOX_PROJECT') {
+  <workspace-nav
+    group="project"
+    [projectId]="currentProject()?.id || ''"
+  />
+}
 @if (currentProject()?.isArchived) {
   <div class="archived-notice">
     <span>

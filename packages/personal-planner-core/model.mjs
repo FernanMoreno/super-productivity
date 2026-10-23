@@ -20,6 +20,7 @@ export const SCOPES = {
 export function emptyProfile() {
   return {
     schemaVersion: 2,
+    preferences: { hourFormat: '24h', sessionMinutes: 25, transitionMinutes: 0 },
     timezone: 'Europe/Madrid',
     weekStartsOn: 1,
     areas: [],
@@ -284,6 +285,21 @@ export function validateProfile(p) {
     throw Error('Zona horaria IANA inválida.');
   }
   require(text(p.timezone), 'Zona horaria inválida.');
+  const defaults = { hourFormat: '24h', sessionMinutes: 25, transitionMinutes: 0 };
+  require(p.preferences === undefined ||
+    (p.preferences &&
+      typeof p.preferences === 'object' &&
+      !Array.isArray(p.preferences)), 'Preferencias inválidas.');
+  const preferences = { ...defaults, ...p.preferences };
+  require(Object.keys(preferences).every((key) => Object.hasOwn(defaults, key)) &&
+    ['24h', '12h'].includes(preferences.hourFormat) &&
+    Number.isInteger(preferences.sessionMinutes) &&
+    preferences.sessionMinutes >= 1 &&
+    preferences.sessionMinutes <= 480 &&
+    Number.isInteger(preferences.transitionMinutes) &&
+    preferences.transitionMinutes >= 0 &&
+    preferences.transitionMinutes <= 240, 'Preferencias fuera de rango.');
+  p.preferences = preferences;
   require(p.weekStartsOn === undefined ||
     (Number.isInteger(p.weekStartsOn) &&
       p.weekStartsOn >= 0 &&

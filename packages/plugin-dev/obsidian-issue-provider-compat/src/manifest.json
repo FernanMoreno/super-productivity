@@ -1,0 +1,23 @@
+{
+  "id": "obsidian-issue-provider",
+  "name": "Obsidian",
+  "version": "1.4.2",
+  "manifestVersion": 1,
+  "minSupVersion": "14.0.0",
+  "description": "2-way sync between Super Productivity and Obsidian tasks/notes.",
+  "author": "Sinenomine",
+  "homepage": "https://codeberg.org/sinenomine/sp-obsidian",
+  "type": "issueProvider",
+  "icon": "icon.svg",
+  "iFrame": false,
+  "permissions": [],
+  "hooks": [],
+  "issueProvider": {
+    "pollIntervalMs": 30000,
+    "issueStrings": {
+      "singular": "Note",
+      "plural": "Notes"
+    },
+    "allowLocalhost": true
+  }
+}

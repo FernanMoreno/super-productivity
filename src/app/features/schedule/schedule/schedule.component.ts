@@ -1,3 +1,4 @@
+import { WorkspaceNavComponent } from '../../../pages/workspace-nav.component';
 /* eslint-disable */
 import {
   ChangeDetectionStrategy,
@@ -75,6 +76,7 @@ import { DateService } from '../../../core/date/date.service';
 @Component({
   selector: 'schedule',
   imports: [
+    WorkspaceNavComponent,
     ScheduleWeekComponent,
     ScheduleMonthComponent,
     SwipePagerComponent,

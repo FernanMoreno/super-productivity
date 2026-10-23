@@ -1,3 +1,4 @@
+import { PluginService } from '../../../plugins/plugin.service';
 import { ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { ComponentRef, NO_ERRORS_SCHEMA, signal, WritableSignal } from '@angular/core';
 import { EMPTY, of } from 'rxjs';
@@ -105,6 +106,7 @@ describe('TaskDetailPanelComponent', () => {
       ],
       schemas: [NO_ERRORS_SCHEMA],
       providers: [
+        { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
         { provide: ClipboardImageService, useValue: mockClipboardImageService },
         { provide: TaskAttachmentService, useValue: mockAttachmentService },
         { provide: TaskService, useValue: mockTaskService },
@@ -439,6 +441,7 @@ describe('TaskDetailPanelComponent stale-focus guard', () => {
     await TestBed.configureTestingModule({
       imports: [TaskDetailPanelComponent],
       providers: [
+        { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
         {
           provide: TaskService,
           useValue: {
@@ -628,6 +631,7 @@ describe('TaskDetailPanelComponent notes target does not auto-edit', () => {
     await TestBed.configureTestingModule({
       imports: [TaskDetailPanelComponent],
       providers: [
+        { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
         {
           provide: TaskService,
           useValue: {
@@ -729,6 +733,7 @@ describe('TaskDetailPanelComponent add sub-task', () => {
     await TestBed.configureTestingModule({
       imports: [TaskDetailPanelComponent],
       providers: [
+        { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
         {
           provide: TaskService,
           useValue: {

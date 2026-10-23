@@ -171,6 +171,7 @@ async function getPlugins() {
         plugins.push({
           name: entry.name,
           path: `packages/plugin-dev/${entry.name}`,
+          skipCopy: packageJson.superProductivity?.skipCopy === true,
           buildCommand: hasRealBuildScript ? 'npm run build' : undefined,
           files,
           requiredFiles,
@@ -363,4 +364,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildAll, buildPlugin, pluginAssets };
+module.exports = { buildAll, buildPlugin, pluginAssets, getPlugins };

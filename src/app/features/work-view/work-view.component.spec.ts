@@ -200,6 +200,70 @@ const overrideDefaultSelectors = (store: MockStore): void => {
 describe('WorkViewComponent', () => {
   let store: MockStore;
 
+  describe('project overdue section', () => {
+    const setup = async (
+      isTodayList = false,
+    ): Promise<{
+      cmp: WorkViewComponent;
+      context$: BehaviorSubject<{ id: string; type: string }>;
+      a: TaskWithSubTasks;
+      b: TaskWithSubTasks;
+      regular: TaskWithSubTasks;
+    }> => {
+      const context$ = new BehaviorSubject({ id: 'ctx', type: 'PROJECT' });
+      const a = { ...buildTask('overdue-a'), projectId: 'ctx' };
+      const b = { ...buildTask('overdue-b'), projectId: 'other' };
+      const regular = { ...buildTask('regular'), projectId: 'ctx' };
+      configureWorkViewTestBed({
+        isTodayList,
+        customizerService: {
+          customizeUndoneTasks: () =>
+            of({
+              list: [a, regular],
+              grouped: { Group: [a, regular] },
+              groups: [{ key: 'Group', tasks: [a, regular], tagId: null }],
+            }),
+        },
+      });
+      Object.assign(TestBed.inject(WorkContextService), {
+        activeWorkContext$: context$.asObservable(),
+      });
+      store = TestBed.inject(MockStore);
+      overrideDefaultSelectors(store);
+      store.overrideSelector(selectOverdueTasksWithSubTasks, [a, b]);
+      const fixture = TestBed.createComponent(WorkViewComponent);
+      fixture.componentRef.setInput('undoneTasks', [a, regular]);
+      fixture.componentRef.setInput('doneTasks', []);
+      fixture.componentRef.setInput('backlogTasks', []);
+      fixture.detectChanges();
+      return { cmp: fixture.componentInstance, context$, a, b, regular };
+    };
+
+    it('shows only the open project overdue tasks and follows project changes', async () => {
+      const { cmp, context$, a, b } = await setup();
+      expect(cmp.isShowOverduePanel()).toBeTrue();
+      expect(cmp.overdueTasks()).toEqual([a]);
+      context$.next({ id: 'other', type: 'PROJECT' });
+      expect(cmp.overdueTasks()).toEqual([b]);
+      context$.next({ id: 'empty', type: 'PROJECT' });
+      expect(cmp.isShowOverduePanel()).toBeFalse();
+    });
+
+    it('keeps overdue rows out of flat, grouped and section project lists', async () => {
+      const { cmp, regular } = await setup();
+      expect(cmp.customizedUndoneTasks().list).toEqual([regular]);
+      expect(cmp.customizedUndoneTasks().groups?.[0].tasks).toEqual([regular]);
+      expect(cmp.customizedUndoneTasks().grouped?.['Group']).toEqual([regular]);
+      expect(cmp.undoneTasksBySection().noSection).toEqual([regular]);
+    });
+
+    it('keeps Today overdue tasks global', async () => {
+      const { cmp, a, b } = await setup(true);
+      expect(cmp.isShowOverduePanel()).toBeTrue();
+      expect(cmp.overdueTasks()).toEqual([a, b]);
+    });
+  });
+
   // overrideSelector() calls setResult() on the GLOBAL selector singletons, and
   // NgRx MockStore does not auto-clear them between specs. Without this, the
   // frozen today/offset values (selectTodayStr, selectStartOfNextDayDiffMs) leak
@@ -334,6 +398,7 @@ describe('WorkViewComponent', () => {
 
     it('keeps the selection when on TODAY_TAG and task is in overdueTasks', async () => {
       activeContext.id = TODAY_TAG.id;
+      Object.assign(TestBed.inject(WorkContextService), { isTodayList$: of(true) });
       store.overrideSelector(selectOverdueTasksWithSubTasks, [buildTask('overdue-1')]);
       store.refreshState();
 

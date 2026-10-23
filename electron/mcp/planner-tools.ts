@@ -105,7 +105,63 @@ const editError = (args: Record<string, unknown>): string | undefined => {
   return undefined;
 };
 const taskError = (args: Record<string, unknown>): string | undefined => {
-  const extra = unknown(args, ['operationId', 'taskId', 'fields', 'moveScope']);
+  const extra = unknown(args, [
+    'operationId',
+    'taskId',
+    'fields',
+    'moveScope',
+    'command',
+    'children',
+    'expected',
+  ]);
+  if (extra) return extra;
+  if (
+    args.expected !== undefined &&
+    (!isRecord(args.expected) ||
+      unknown(args.expected, [
+        'isDone',
+        'dueDay',
+        'dueWithTime',
+        'timeSpent',
+        'timeEstimate',
+        'subTaskIds',
+      ]))
+  )
+    return 'expected must contain supported native snapshot fields';
+  if (args.command !== undefined) {
+    if (
+      !['split', 'archive'].includes(String(args.command)) ||
+      !validOperation(args.operationId) ||
+      !validId(args.taskId)
+    )
+      return 'command requires split or archive, operationId and taskId';
+    if (args.fields !== undefined || args.moveScope !== undefined)
+      return 'Command does not accept fields or moveScope';
+    if (args.command === 'archive')
+      return args.children === undefined ? undefined : 'archive does not accept children';
+    if (
+      !Array.isArray(args.children) ||
+      args.children.length < 2 ||
+      args.children.length > 50 ||
+      args.children.some(
+        (child) =>
+          !isRecord(child) ||
+          unknown(child, ['title', 'timeEstimate']) ||
+          typeof child.title !== 'string' ||
+          !child.title.trim() ||
+          child.title.length > 500 ||
+          (child.timeEstimate !== undefined &&
+            (typeof child.timeEstimate !== 'number' ||
+              !Number.isSafeInteger(child.timeEstimate) ||
+              child.timeEstimate < 0 ||
+              child.timeEstimate > 365 * 86400000)),
+      )
+    )
+      return 'split requires 2 to 50 children with title and optional integer timeEstimate milliseconds';
+    return undefined;
+  }
+  if (args.children !== undefined || args.expected !== undefined)
+    return 'children and expected require an explicit command';
   if (extra) return extra;
   if (
     args.moveScope !== undefined &&
@@ -214,7 +270,172 @@ const applyError = (args: Record<string, unknown>): string | undefined => {
   return undefined;
 };
 
+const boundedInteger = (v: unknown, min: number, max: number): boolean =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max;
+const optionalIdError = (
+  args: Record<string, unknown>,
+  key: string,
+): string | undefined =>
+  args[key] !== undefined && !validId(args[key]) ? `${key} must be an id` : undefined;
+const nextError = (args: Record<string, unknown>): string | undefined =>
+  unknown(args, ['date', 'now', 'availableMinutes', 'contextAreaId', 'limit']) ||
+  (args.date !== undefined && !validDay(args.date)
+    ? 'date must be a calendar date'
+    : undefined) ||
+  (args.now !== undefined && !boundedInteger(args.now, 0, 8640000000000000)
+    ? 'now must be epoch milliseconds'
+    : undefined) ||
+  (args.availableMinutes !== undefined && !boundedInteger(args.availableMinutes, 1, 1440)
+    ? 'availableMinutes must be 1 to 1440'
+    : undefined) ||
+  (args.contextAreaId === null ? undefined : optionalIdError(args, 'contextAreaId')) ||
+  (args.limit !== undefined && !boundedInteger(args.limit, 1, 3)
+    ? 'limit must be 1 to 3'
+    : undefined);
+const reviewError = (args: Record<string, unknown>): string | undefined =>
+  unknown(args, ['from', 'to', 'reviewId']) ||
+  optionalIdError(args, 'reviewId') ||
+  rangeError({ from: args.from, to: args.to });
+const REVIEW_COMMANDS = ['start', 'decide', 'finish', 'task_state', 'preferences'];
+const REVIEW_DECISIONS = [
+  'keep',
+  'reschedule',
+  'split',
+  'pause',
+  'archive',
+  'correct_time',
+];
+const reviewAdvanceError = (args: Record<string, unknown>): string | undefined => {
+  const extra = unknown(args, [
+    'operationId',
+    'expectedRevision',
+    'command',
+    'from',
+    'to',
+    'reviewId',
+    'itemId',
+    'decision',
+    'taskId',
+    'taskState',
+    'preferences',
+  ]);
+  if (extra) return extra;
+  if (
+    !validOperation(args.operationId) ||
+    typeof args.expectedRevision !== 'string' ||
+    !args.expectedRevision ||
+    args.expectedRevision.length > 200 ||
+    !REVIEW_COMMANDS.includes(String(args.command))
+  )
+    return 'operationId, expectedRevision and supported command are required';
+  if (args.command === 'start') return rangeError({ from: args.from, to: args.to });
+  if (args.command === 'finish')
+    return validId(args.reviewId) ? undefined : 'finish requires reviewId';
+  if (args.command === 'decide')
+    return validId(args.reviewId) &&
+      validId(args.itemId) &&
+      REVIEW_DECISIONS.includes(String(args.decision))
+      ? undefined
+      : 'decide requires reviewId, itemId and decision';
+  if (args.command === 'task_state')
+    return validId(args.taskId) &&
+      ['active', 'paused', 'blocked'].includes(String(args.taskState))
+      ? undefined
+      : 'task_state requires taskId and taskState';
+  const preferences = args.preferences;
+  if (
+    !isRecord(preferences) ||
+    !Object.keys(preferences).length ||
+    unknown(preferences, ['contextAreaId', 'availableMinutes'])
+  )
+    return 'preferences must contain supported preference fields';
+  if (
+    preferences.contextAreaId !== undefined &&
+    preferences.contextAreaId !== null &&
+    !validId(preferences.contextAreaId)
+  )
+    return 'contextAreaId must be an id or null';
+  if (
+    preferences.availableMinutes !== undefined &&
+    preferences.availableMinutes !== null &&
+    !boundedInteger(preferences.availableMinutes, 1, 1440)
+  )
+    return 'availableMinutes must be 1 to 1440 or null';
+  return undefined;
+};
+const correctTimeError = (args: Record<string, unknown>): string | undefined => {
+  const extra = unknown(args, [
+    'operationId',
+    'activityId',
+    'taskId',
+    'date',
+    'durationMs',
+    'expectedDurationMs',
+  ]);
+  if (extra) return extra;
+  if (
+    !validOperation(args.operationId) ||
+    !validId(args.activityId) ||
+    !validId(args.taskId) ||
+    !validDay(args.date)
+  )
+    return 'operationId, activityId, taskId and date are required';
+  return boundedInteger(args.durationMs, 0, 86400000) &&
+    boundedInteger(args.expectedDurationMs, 0, 86400000)
+    ? undefined
+    : 'durationMs and expectedDurationMs must be integer milliseconds from zero to 24 hours';
+};
+const adjustError = (args: Record<string, unknown>): string | undefined => {
+  const extra = unknown(args, ['proposalId', 'changes']);
+  if (extra) return extra;
+  if (
+    !validId(args.proposalId) ||
+    !Array.isArray(args.changes) ||
+    !args.changes.length ||
+    args.changes.length > MAX_SELECTION
+  )
+    return 'proposalId and 1 to 500 changes are required';
+  const ids = new Set();
+  for (const change of args.changes) {
+    if (
+      !isRecord(change) ||
+      unknown(change, ['itemId', 'start', 'end']) ||
+      !validId(change.itemId) ||
+      ids.has(change.itemId) ||
+      !boundedInteger(change.start, 1, 8640000000000000) ||
+      (change.end !== undefined &&
+        (!boundedInteger(change.end, 1, 8640000000000000) ||
+          Number(change.end) <= Number(change.start)))
+    )
+      return 'changes require distinct itemId, epoch millisecond start and optional later end';
+    ids.add(change.itemId);
+  }
+  return undefined;
+};
+const historyError = (args: Record<string, unknown>): string | undefined =>
+  unknown(args, ['historyId', 'limit']) ||
+  optionalIdError(args, 'historyId') ||
+  (args.limit !== undefined && !boundedInteger(args.limit, 1, 100)
+    ? 'limit must be 1 to 100'
+    : undefined);
+const undoError = (args: Record<string, unknown>): string | undefined => {
+  const extra = unknown(args, ['historyId', 'selection']);
+  if (extra) return extra;
+  if (!validId(args.historyId)) return 'historyId is required';
+  if (
+    args.selection !== undefined &&
+    (!Array.isArray(args.selection) ||
+      !args.selection.length ||
+      args.selection.length > MAX_SELECTION ||
+      !args.selection.every(validId) ||
+      new Set(args.selection).size !== args.selection.length)
+  )
+    return 'selection must contain 1 to 500 distinct change ids';
+  return undefined;
+};
+
 interface PlannerToolOptions {
+  name?: string;
   action:
     | 'activities'
     | 'query'
@@ -223,7 +444,14 @@ interface PlannerToolOptions {
     | 'log_time'
     | 'prepare'
     | 'apply'
-    | 'operation_status';
+    | 'operation_status'
+    | 'next'
+    | 'review'
+    | 'review_advance'
+    | 'correct_time'
+    | 'proposal_adjust'
+    | 'history'
+    | 'prepare_undo';
   requiredScopes: readonly AssistantAccessScope[];
   mutates?: boolean;
   description: string;
@@ -235,7 +463,7 @@ const plannerTool = (options: PlannerToolOptions): ToolSpec => ({
   requiredScopes: options.requiredScopes,
   mutates: options.mutates,
   definition: {
-    name: `planner_${options.action}`,
+    name: options.name ?? `planner_${options.action}`,
     description: options.description + ' ' + UNTRUSTED_NOTE,
     inputSchema: {
       type: 'object',
@@ -298,6 +526,8 @@ const RECEIPT_SCOPES: Record<string, readonly AssistantAccessScope[]> = {
   task: ['tasks:read', 'tasks:write'],
   log_time: [...QUERY_SCOPES, 'time:write'],
   apply: [...QUERY_SCOPES, 'planner:write'],
+  review_advance: [...QUERY_SCOPES, 'planner:write'],
+  correct_time: [...QUERY_SCOPES, 'time:write'],
 };
 export const PLANNER_TOOLS: ToolSpec[] = [
   plannerTool({
@@ -307,7 +537,10 @@ export const PLANNER_TOOLS: ToolSpec[] = [
       'Reads a durable receipt by operationId without retrying a mutation. Requires permissions for the original action. Pending or absent receipts do not prove that a change was not applied.',
     properties: {
       operationId: operationSchema,
-      action: { type: 'string', enum: ['edit', 'task', 'log_time', 'apply'] },
+      action: {
+        type: 'string',
+        enum: ['edit', 'task', 'log_time', 'apply', 'review_advance', 'correct_time'],
+      },
     },
     required: ['operationId', 'action'],
     validate: (args) =>
@@ -361,11 +594,38 @@ export const PLANNER_TOOLS: ToolSpec[] = [
     requiredScopes: ['tasks:read', 'tasks:write'],
     mutates: true,
     description:
-      'Creates or updates a native task. Omit taskId to create; provide taskId to update. Uses native services and stable operationId; no time tracking internals or notes are accepted.',
+      'Creates or updates a native task, or explicitly splits/archives an identified task with command. Split accepts 2–50 child titles and optional estimates; archive accepts no fields or children. Native services preserve invariants. Reuse operationId on retry.',
     properties: {
       operationId: operationSchema,
       taskId: idSchema,
       moveScope: { type: 'string', enum: ['occurrence', 'series'] },
+      command: { type: 'string', enum: ['split', 'archive'] },
+      expected: {
+        type: 'object',
+        properties: {
+          isDone: { type: 'boolean' },
+          dueDay: { anyOf: [dateSchema, { type: 'null' }] },
+          dueWithTime: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
+          timeSpent: { type: 'integer', minimum: 0 },
+          timeEstimate: { type: 'integer', minimum: 0 },
+          subTaskIds: { type: 'array', items: idSchema },
+        },
+        additionalProperties: false,
+      },
+      children: {
+        type: 'array',
+        minItems: 2,
+        maxItems: 50,
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 500 },
+            timeEstimate: { type: 'integer', minimum: 0, maximum: 365 * 86400000 },
+          },
+          required: ['title'],
+          additionalProperties: false,
+        },
+      },
       fields: {
         type: 'object',
         properties: {
@@ -386,7 +646,7 @@ export const PLANNER_TOOLS: ToolSpec[] = [
         minProperties: 1,
       },
     },
-    required: ['operationId', 'fields'],
+    required: ['operationId'],
     validate: taskError,
   }),
   plannerTool({
@@ -433,5 +693,139 @@ export const PLANNER_TOOLS: ToolSpec[] = [
     },
     required: ['operationId', 'proposalId', 'selection'],
     validate: applyError,
+  }),
+  plannerTool({
+    action: 'next',
+    requiredScopes: QUERY_SCOPES,
+    description:
+      'Recommends up to three next actions from current planner and native task data, with reasons. Does not start timers or modify tasks.',
+    properties: {
+      date: dateSchema,
+      now: { type: 'integer', minimum: 0, maximum: 8640000000000000 },
+      availableMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
+      contextAreaId: { anyOf: [idSchema, { type: 'null' }] },
+      limit: { type: 'integer', minimum: 1, maximum: 3 },
+    },
+    validate: nextError,
+  }),
+  plannerTool({
+    action: 'review',
+    requiredScopes: QUERY_SCOPES,
+    description:
+      'Reads a review interval and saved review progress without advancing or completing it.',
+    properties: { ...rangeProperties, reviewId: idSchema },
+    required: ['from', 'to'],
+    validate: reviewError,
+  }),
+  plannerTool({
+    action: 'review_advance',
+    requiredScopes: [...QUERY_SCOPES, 'planner:write'],
+    mutates: true,
+    description:
+      'Starts, advances or explicitly finishes a saved review against expectedRevision. Decisions and planner task states do not implicitly mutate native tasks. Reuse operationId on retry.',
+    properties: {
+      operationId: operationSchema,
+      expectedRevision: { type: 'string', minLength: 1, maxLength: 200 },
+      command: { type: 'string', enum: REVIEW_COMMANDS },
+      ...rangeProperties,
+      reviewId: idSchema,
+      itemId: idSchema,
+      decision: { type: 'string', enum: REVIEW_DECISIONS },
+      taskId: idSchema,
+      taskState: { type: 'string', enum: ['active', 'paused', 'blocked'] },
+      preferences: {
+        type: 'object',
+        properties: {
+          contextAreaId: { anyOf: [idSchema, { type: 'null' }] },
+          availableMinutes: {
+            anyOf: [{ type: 'integer', minimum: 1, maximum: 1440 }, { type: 'null' }],
+          },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+    required: ['operationId', 'expectedRevision', 'command'],
+    validate: reviewAdvanceError,
+  }),
+  plannerTool({
+    action: 'correct_time',
+    requiredScopes: [...QUERY_SCOPES, 'time:write'],
+    mutates: true,
+    description:
+      'Sets a native leaf task calendar-day total to durationMs, including zero, only if its total still equals expectedDurationMs. Requires its associated activityId. Uses native time validation and durable operationId; never writes parent aggregates.',
+    properties: {
+      operationId: operationSchema,
+      activityId: idSchema,
+      taskId: idSchema,
+      date: dateSchema,
+      durationMs: { type: 'integer', minimum: 0, maximum: 86400000 },
+      expectedDurationMs: { type: 'integer', minimum: 0, maximum: 86400000 },
+    },
+    required: [
+      'operationId',
+      'activityId',
+      'taskId',
+      'date',
+      'durationMs',
+      'expectedDurationMs',
+    ],
+    validate: correctTimeError,
+  }),
+  plannerTool({
+    action: 'proposal_adjust',
+    requiredScopes: QUERY_SCOPES,
+    description:
+      'Adjusts proposed intervals by itemId and returns a newly validated proposal. start/end are epoch milliseconds. This changes no tasks or commitments; apply its selected changes explicitly.',
+    properties: {
+      proposalId: idSchema,
+      changes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: MAX_SELECTION,
+        items: {
+          type: 'object',
+          properties: {
+            itemId: idSchema,
+            start: { type: 'integer', minimum: 1, maximum: 8640000000000000 },
+            end: { type: 'integer', minimum: 1, maximum: 8640000000000000 },
+          },
+          required: ['itemId', 'start'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['proposalId', 'changes'],
+    validate: adjustError,
+  }),
+  plannerTool({
+    action: 'history',
+    name: 'planner_reorganizations',
+    requiredScopes: QUERY_SCOPES,
+    description:
+      'Reads durable reorganization history, or one historyId, including confirmed and uncertain outcomes. Reading history never undoes or retries a change.',
+    properties: {
+      historyId: idSchema,
+      limit: { type: 'integer', minimum: 1, maximum: 100 },
+    },
+    validate: historyError,
+  }),
+  plannerTool({
+    action: 'prepare_undo',
+    requiredScopes: QUERY_SCOPES,
+    description:
+      'Prepares a reviewable inverse proposal for historyId and optional selected change ids. Rejects incompatible later changes. Does not undo anything; apply selected proposal ids separately with planner_apply.',
+    properties: {
+      historyId: idSchema,
+      selection: {
+        type: 'array',
+        items: idSchema,
+        minItems: 1,
+        maxItems: MAX_SELECTION,
+        uniqueItems: true,
+      },
+    },
+    required: ['historyId'],
+    validate: undoError,
   }),
 ];

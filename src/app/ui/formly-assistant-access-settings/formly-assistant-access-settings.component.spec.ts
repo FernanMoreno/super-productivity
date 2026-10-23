@@ -126,7 +126,10 @@ describe('FormlyAssistantAccessSettingsComponent', () => {
       'tasks:write',
       'time:write',
     ];
-    expect(fixture.nativeElement.querySelectorAll('mat-checkbox.scope').length).toBe(8);
+    expect(fixture.nativeElement.querySelectorAll('mat-checkbox.scope').length).toBe(22);
+    for (const permission of component.controlPermissions) {
+      expect(component.hasScope(permission.scope)).toBeFalse();
+    }
     for (const scope of scopes) expect(component.hasScope(scope)).toBeFalse();
     await component.setScope('planner:write', true);
     expect(setAssistantAccessScopes).toHaveBeenCalledOnceWith(['planner:write']);

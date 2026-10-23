@@ -1,6 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 const root = new URL('../', import.meta.url),
   src = new URL('src/', root);
 const core = new URL('../../../personal-planner-core/', src);
@@ -101,21 +102,25 @@ for (const method of [
   'compareAndSwapSyncedData',
   'plannerOperation',
   'selectTask',
+  'getCurrentLanguage',
+  'translate',
 ]) {
   assert.ok(types.includes(`${method}(`), `Método ausente en API: ${method}`);
   assert.ok(iframe.includes(`${method}:`), `Método ausente en iframe: ${method}`);
 }
-execFileSync('python3', [
+execFileSync(process.platform === 'win32' ? 'python' : 'python3', [
   '-c',
   `import zipfile,json,sys
 with zipfile.ZipFile(sys.argv[1]) as z:
- assert set(z.namelist())=={'manifest.json','index.html','LICENSE','NOTICE'}
+ assert set(z.namelist())=={'manifest.json','index.html','LICENSE','NOTICE','i18n/en.json','i18n/es.json'}
  m=json.loads(z.read('manifest.json')); assert m['iFrame'] and m['id']=='personal-planner'
  assert 'compareAndSwapSyncedData' in m['permissions'] and 'persistedDataChanged' in m['hooks']
+ assert 'languageChange' in m['hooks'] and m['i18n']['languages']==['en','es']
+ assert json.loads(z.read('i18n/en.json')) and json.loads(z.read('i18n/es.json'))
  h=z.read('index.html').decode(); assert '<html lang="es">' in h and 'BUILD:SCRIPT' not in h
  assert '<script src=' not in h and 'fetch(' not in h
  assert b'MIT' in z.read('LICENSE')`,
-  new URL('dist/personal-planner.zip', root).pathname,
+  fileURLToPath(new URL('dist/personal-planner.zip', root)),
 ]);
 console.log(
   'PASS arquitectura, detector de ciclos, contrato API/iframe y estructura pública del ZIP.',

@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import { navigate, openDiagnostics } from './navigation-helper.mjs';
 import { emptyProfile, createArea } from '../src/model.mjs';
 
 const html = await readFile(new URL('../dist/index.html', import.meta.url));
@@ -10,7 +11,10 @@ const server = createServer((_, response) => {
   response.end(html);
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  executablePath: process.env.CHROME_BIN || undefined,
+});
 const errors = [];
 async function fixture(mode) {
   const context = await browser.newContext({ timezoneId: 'Europe/Madrid' });
@@ -62,10 +66,16 @@ async function fixture(mode) {
         registerHook: () => {},
         plannerOperation: async (action, params) => {
           window.fixtureCalls.push({ action, params: structuredClone(params) });
+          if (action === 'calendar_snapshot')
+            return { calendarEvents: [], calendarWarnings: [] };
+          if (action === 'history') return { entries: [] };
+          if (action === 'proposal_adjust') {
+            return { ...window.fixtureProposal, proposalId: 'adjusted-proposal' };
+          }
           if (action === 'prepare') {
             const date = params.from;
             const start = Date.parse(date + 'T10:00:00+01:00');
-            return {
+            return (window.fixtureProposal = {
               proposalId: 'fictitious-proposal',
               expiresAt: Date.now() + 900000,
               proposals: [
@@ -88,7 +98,7 @@ async function fixture(mode) {
                   reason: 'Objetivo ficticio pendiente; requiere revisión.',
                 },
               ],
-            };
+            });
           }
           if (action !== 'apply') throw Error('Unexpected fixture action');
           if (mode === 'deferred') {
@@ -129,6 +139,7 @@ async function fixture(mode) {
   );
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('#status').filter({ hasText: 'Datos actualizados' }).waitFor();
+  await navigate(page, 'week');
   return { page, context };
 }
 try {
@@ -139,7 +150,7 @@ try {
       tasks: localStorage.getItem('native-tasks'),
     }));
     await page.locator('[data-action="prepare-shared"]').click();
-    const review = page.locator('form[data-form="apply-proposal"]');
+    const review = page.locator('form[data-guided="apply-proposal"]');
     await review.waitFor();
     assert.equal(await review.locator('input[name="selection"]').count(), 2);
     assert.equal(await review.locator('input:checked').count(), 0);
@@ -153,7 +164,12 @@ try {
       })),
       before,
     );
-    assert.deepEqual(await page.evaluate(() => window.fixtureWrites), []);
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.fixtureWrites.filter((key) => key !== 'ui-state-v1'),
+      ),
+      [],
+    );
     await review.getByRole('button', { name: 'Aplicar selección revisada' }).click();
     await page.locator('#error:not([hidden])').waitFor();
     assert.match(await page.locator('#error').innerText(), /Selecciona/);
@@ -166,8 +182,8 @@ try {
     await review.locator('input[value="native-choice"]').check();
     await review.getByRole('button', { name: 'Aplicar selección revisada' }).click();
     await page
-      .locator('#proposal-review')
-      .filter({ hasText: 'aplicada y confirmada' })
+      .locator('#guided-proposal')
+      .filter({ hasText: 'Operación confirmada.' })
       .waitFor();
     const applied = await page.evaluate(() =>
       window.fixtureCalls.filter((c) => c.action === 'apply'),
@@ -182,10 +198,98 @@ try {
     );
     await context.close();
   }
+  {
+    const { page, context } = await fixture('applied');
+    await page.locator('[data-action="prepare-shared"]').click();
+    const adjustments = page.locator('[data-guided="adjust-proposal"]');
+    await adjustments.locator('button').click();
+    await page
+      .locator('#guided-adjust-status')
+      .filter({ hasText: 'Sin ajustes' })
+      .waitFor();
+    assert.equal(
+      await page.evaluate(
+        () => window.fixtureCalls.filter((c) => c.action === 'proposal_adjust').length,
+      ),
+      0,
+    );
+    await adjustments.locator('[name="start:native-choice"]').fill('11:00');
+    await adjustments.locator('[name="end:native-choice"]').fill('11:30');
+    await adjustments.locator('button').click();
+    await page.waitForFunction(() =>
+      window.fixtureCalls.some((c) => c.action === 'proposal_adjust'),
+    );
+    const adjusted = await page.evaluate(() =>
+      window.fixtureCalls.find((c) => c.action === 'proposal_adjust'),
+    );
+    assert.deepEqual(
+      adjusted.params.changes.map((c) => c.itemId),
+      ['native-choice'],
+    );
+    assert.equal(adjusted.params.proposalId, 'fictitious-proposal');
+    await context.close();
+  }
+  {
+    const { page, context } = await fixture('uncertain');
+    await page.locator('[data-action="prepare-shared"]').click();
+    const review = page.locator('[data-guided="apply-proposal"]');
+    await review.locator('[value="native-choice"]').check();
+    await review.locator('button').click();
+    await page.locator('#error:not([hidden])').waitFor();
+    const pending = await page.evaluate(
+      () => JSON.parse(localStorage.getItem('ui-state-v1')).pending[0],
+    );
+    assert.ok(pending.operationId);
+    await page.reload();
+    await page.locator('#status').filter({ hasText: 'Datos actualizados' }).waitFor();
+    await page
+      .locator('#guided-pending')
+      .filter({ hasText: pending.operationId })
+      .waitFor();
+    assert.equal(
+      await page.evaluate(
+        () => window.fixtureCalls.filter((c) => c.action === 'apply').length,
+      ),
+      0,
+    );
+    await page.locator('[data-action="prepare-shared"]').click();
+    await page.locator('#error:not([hidden])').waitFor();
+    assert.equal(
+      await page.evaluate(
+        () => window.fixtureCalls.filter((c) => c.action === 'prepare').length,
+      ),
+      0,
+    );
+    await page.locator('[data-action="guided-acknowledge"]').click();
+    await page.waitForFunction(
+      () => !document.querySelector('[data-action="guided-acknowledge"]'),
+    );
+    const closed = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('ui-state-v1')).closedNotices.at(-1),
+    );
+    assert.equal(closed.operationId, pending.operationId);
+    assert.equal(closed.acknowledgement, 'manual-result-checked');
+    const receipt = await page.evaluate(
+      (id) => JSON.parse(localStorage.getItem('op-' + id)),
+      pending.operationId,
+    );
+    assert.equal(
+      receipt.status,
+      'pending',
+      'manual acknowledgement must not forge an application receipt',
+    );
+    assert.equal(
+      await page.evaluate(
+        () => window.fixtureCalls.filter((c) => c.action === 'apply').length,
+      ),
+      0,
+    );
+    await context.close();
+  }
   for (const mode of ['uncertain', 'disconnected']) {
     const { page, context } = await fixture(mode);
     await page.locator('[data-action="prepare-shared"]').click();
-    const review = page.locator('form[data-form="apply-proposal"]');
+    const review = page.locator('form[data-guided="apply-proposal"]');
     await review.locator('input[value="planner-choice"]').check();
     await review.getByRole('button', { name: 'Aplicar selección revisada' }).click();
     await page.locator('#error:not([hidden])').waitFor();
@@ -213,10 +317,7 @@ try {
       await review.locator('input[value="planner-choice"]').isDisabled(),
       true,
     );
-    const summary = page
-      .locator('summary')
-      .filter({ hasText: 'Consultar una operación tras perder conexión' });
-    if (!(await summary.evaluate((el) => el.parentElement.open))) await summary.click();
+    await openDiagnostics(page);
     const receipt = page.locator('form[data-form="operation-status"]');
     await receipt.locator('[name="action"]').selectOption('apply');
     await receipt.locator('[name="operationId"]').fill(operationId);
@@ -249,7 +350,12 @@ try {
       ),
       1,
     );
-    assert.deepEqual(await page.evaluate(() => window.fixtureWrites), []);
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.fixtureWrites.filter((key) => key !== 'ui-state-v1'),
+      ),
+      [],
+    );
     // A later native confirmation permits a fresh proposal; it never reapplies the old one.
     await page.evaluate((operationId) => {
       const key = 'op-' + operationId;
@@ -264,9 +370,10 @@ try {
       .locator('#operation-result')
       .filter({ hasText: 'Cambio confirmado' })
       .waitFor();
+    await navigate(page, 'week');
     await page.locator('[data-action="prepare-shared"]').click();
     await page
-      .locator('form[data-form="apply-proposal"] input[value="native-choice"]')
+      .locator('form[data-guided="apply-proposal"] input[value="native-choice"]')
       .waitFor();
     assert.equal(
       await page.evaluate(
@@ -285,7 +392,7 @@ try {
   {
     const { page, context } = await fixture('deferred');
     await page.locator('[data-action="prepare-shared"]').click();
-    const review = page.locator('form[data-form="apply-proposal"]');
+    const review = page.locator('form[data-guided="apply-proposal"]');
     await review.locator('input[value="native-choice"]').check();
     await review.getByRole('button', { name: 'Aplicar selección revisada' }).click();
     await page.waitForFunction(() =>
@@ -297,7 +404,7 @@ try {
       .isDisabled();
     await page.evaluate(() => {
       document
-        .querySelector('form[data-form="apply-proposal"]')
+        .querySelector('form[data-guided="apply-proposal"]')
         .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       document.querySelector('[data-action="prepare-shared"]').click();
     });
@@ -312,8 +419,8 @@ try {
     );
     await page.evaluate(() => window.fixtureReleaseApply.forEach((release) => release()));
     await page
-      .locator('#proposal-review')
-      .filter({ hasText: 'aplicada y confirmada' })
+      .locator('#guided-proposal')
+      .filter({ hasText: 'Operación confirmada.' })
       .waitFor();
     await context.close();
   }

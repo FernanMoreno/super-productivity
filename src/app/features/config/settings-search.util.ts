@@ -1,3 +1,4 @@
+import { IS_ELECTRON } from '../../app.constants';
 import { FormlyFieldConfig } from '@ngx-formly/core';
 import { GenericConfigFormSection } from './global-config.model';
 import { T } from '../../t.const';
@@ -35,6 +36,18 @@ export interface SettingsSearchTab {
  * unsearchable.
  */
 const CUSTOM_TARGETS: readonly SettingsSearchTarget[] = [
+  ...(IS_ELECTRON
+    ? [
+        'AW.INTEGRATIONS_ACCESS',
+        T.GCF.MISC.IS_LOCAL_REST_API_ENABLED,
+        T.GCF.MISC.IS_ASSISTANT_ACCESS_ENABLED,
+      ].map((labelKey) => ({
+        labelKey,
+        tabLabelKey: T.PS.TABS.PLUGINS,
+        tabIndex: SETTINGS_PLUGINS_TAB_INDEX,
+        scrollSelector: '.integrations-access-section',
+      }))
+    : []),
   {
     labelKey: T.GCF.MISC.APPEARANCE,
     tabLabelKey: T.PS.TABS.GENERAL,

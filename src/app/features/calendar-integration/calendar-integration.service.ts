@@ -118,7 +118,7 @@ export class CalendarIntegrationService {
       shareReplay({ bufferSize: 1, refCount: true }),
     );
 
-  calendarEvents$: Observable<ScheduleCalendarMapEntry[]> = combineLatest([
+  private readonly _planningProviders$ = combineLatest([
     this._store
       .select(selectCalendarProviders)
       .pipe(distinctUntilChanged(fastArrayCompare)),
@@ -142,7 +142,41 @@ export class CalendarIntegrationService {
       ),
       distinctUntilChanged(fastArrayCompare),
     ),
-  ]).pipe(
+  ]);
+
+  /** Snapshot from the native cache only; never starts a provider/network refresh. */
+  getCachedPlanningSnapshot$(): Observable<{
+    events: CalendarIntegrationEvent[];
+    warnings: string[];
+  }> {
+    return this._planningProviders$.pipe(
+      switchMap(([icalProviders, pluginProviders]) =>
+        this._getFilteredCalProviderFromCache$(icalProviders, pluginProviders).pipe(
+          map((entries) => ({
+            events: entries.flatMap((entry) => entry.items),
+            warnings:
+              icalProviders.length || pluginProviders.length
+                ? [
+                    'Calendarios externos: caché nativa sin garantía de cobertura o actualización completa. Actualiza los calendarios en la aplicación.',
+                  ]
+                : [],
+          })),
+        ),
+      ),
+      first(),
+    );
+  }
+
+  /** A synchronous guard for planning proposals; never exported or logged. */
+  planningCacheFingerprint(): string {
+    return JSON.stringify([
+      loadFromRealLs(LS.CAL_EVENTS_CACHE),
+      this.skippedEventIds$.getValue(),
+      this._hiddenEventsService.hiddenEventIds$.getValue(),
+    ]);
+  }
+
+  calendarEvents$: Observable<ScheduleCalendarMapEntry[]> = this._planningProviders$.pipe(
     switchMap(([icalProviders, pluginCalProviders]) => {
       if (!icalProviders?.length && !pluginCalProviders?.length) {
         return of([]) as Observable<ScheduleCalendarMapEntry[]>;

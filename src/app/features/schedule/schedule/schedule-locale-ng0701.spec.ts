@@ -139,7 +139,9 @@ describe('issue #7383 — NG0701 race on /schedule', () => {
             useValue: { getFirstDayOfWeek: () => 1, setLocale: () => {} },
           },
         ],
-      }).compileComponents();
+      })
+        .overrideComponent(ScheduleComponent, { set: { template: '' } })
+        .compileComponents();
 
       fixture = TestBed.createComponent(ScheduleComponent);
       component = fixture.componentInstance;

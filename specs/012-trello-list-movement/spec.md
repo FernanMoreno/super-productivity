@@ -1,0 +1,5 @@
+# Move linked Trello cards between lists
+
+User explicitly requested implementing the previously missing ability to move Trello cards between lists. Scope: one linked card, active destination list on the card's current board. Existing card/task identity, archived state, title, completion, timer and linkage stay unchanged. Cross-board transfers and automatic mapping of local columns to Trello lists are outside this request.
+
+Integration query must expose current board/list and available list IDs/names. `integration.move` requires taskId, targetListId, expectedListId and expectedBoardId. It requires issues:read/issues:write plus existing workflow task/planner scopes. Stale identity/list/board rejects before writing; provider push must be enabled. Unknown outcomes remain pending and must never be retried automatically. Verify board/list after writing. Native provider owns credentials, list discovery and transport. UI offers a distinct explicit list picker and confirmation; MCP exposes the same action. Do not configure credentials or move live account cards without a specified target.

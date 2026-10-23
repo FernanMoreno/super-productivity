@@ -1,7 +1,7 @@
 {
   "id": "personal-planner",
   "name": "Mi planificación",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Hoy, objetivos y disponibilidad semanal con datos reales de tus tareas.",
   "manifestVersion": 1,
   "minSupVersion": "19.2.0",
@@ -11,7 +11,8 @@
     "persistedDataChanged",
     "anyTaskUpdate",
     "currentTaskChange",
-    "projectListUpdate"
+    "projectListUpdate",
+    "languageChange"
   ],
   "permissions": [
     "getTasks",
@@ -22,9 +23,11 @@
     "loadSyncedData",
     "selectTask",
     "compareAndSwapSyncedData",
-    "plannerOperation"
+    "plannerOperation",
+    "getCurrentLanguage",
+    "translate"
   ],
   "i18n": {
-    "languages": ["es"]
+    "languages": ["en", "es"]
   }
 }

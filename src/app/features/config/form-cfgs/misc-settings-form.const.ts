@@ -39,20 +39,6 @@ export const MISC_SETTINGS_FORM_CFG: ConfigFormSection<MiscConfig> = {
         label: T.GCF.MISC.IS_MINIMIZE_TO_TRAY,
       },
     },
-    ...((IS_ELECTRON
-      ? [
-          {
-            // Keyless: the switch and the token are owned by the Electron main
-            // process and live on this device only, never in the synced misc
-            // config — a synced switch started the API on every desktop.
-            type: 'local-rest-api-settings',
-          },
-          {
-            // Keyless for the same reason: device-local, owned by main.
-            type: 'assistant-access-settings',
-          },
-        ]
-      : []) as LimitedFormlyFieldConfig<MiscConfig>[]),
     // Hidden on channels that self-update (store/snap builds); the value still
     // syncs like the rest of misc config, it just has no effect there.
     ...((isUpdateCheckPossible()

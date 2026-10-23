@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import { navigate, openGoals, openCalendar } from './navigation-helper.mjs';
 import { emptyProfile, createArea } from '../src/model.mjs';
 const html = await readFile(new URL('../dist/index.html', import.meta.url));
 const server = createServer((_, res) => {
@@ -9,7 +10,10 @@ const server = createServer((_, res) => {
   res.end(html);
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  executablePath: process.env.CHROME_BIN || undefined,
+});
 try {
   const context = await browser.newContext({
     timezoneId: 'Europe/Madrid',
@@ -93,10 +97,7 @@ try {
     .click();
   assert.match(await page.evaluate(() => window.selected), /Ficticia/);
   const area = page.locator('form[data-form="area"][data-id="language"]');
-  await page
-    .locator('summary')
-    .filter({ hasText: 'Actividades, objetivos y organización' })
-    .click();
+  await openGoals(page);
   await area.locator('[name="dailyMinutes"]').fill('50');
   await area
     .getByRole('button', { name: 'Guardar Idioma ficticio', exact: true })
@@ -107,10 +108,7 @@ try {
   assert.equal(await area.locator('[name="dailyMinutes"]').inputValue(), '45');
   await page.locator('#day').fill('2027-02-01');
   assert.equal(await area.locator('[name="dailyMinutes"]').inputValue(), '50');
-  await page
-    .locator('summary')
-    .filter({ hasText: 'Compromisos, disponibilidad y recurrencias' })
-    .click();
+  await openCalendar(page);
   const form = page.locator('form[data-form="event"]');
   await form.locator('[name="title"]').fill('Extra ficticio');
   await form.locator('[name="kind"]').selectOption('extra');
@@ -119,26 +117,23 @@ try {
   await form.locator('[name="end"]').fill('11:00');
   await form.getByRole('button', { name: 'Guardar bloque' }).click();
   await page.locator('#status').filter({ hasText: 'Configuración guardada' }).waitFor();
+  await navigate(page, 'today');
   assert.match(await page.locator('#today-content').innerText(), /Extra ficticio/);
+  await navigate(page, 'week');
   assert.match(
     await page.locator('#week-content tbody tr').first().innerText(),
     /1320 min/,
   );
-  await page
-    .locator('summary')
-    .filter({ hasText: 'Compromisos, disponibilidad y recurrencias' })
-    .click();
+  await openCalendar(page);
   await page.locator('[data-action="remove-event"]').click();
   await page.locator('#status').filter({ hasText: 'Configuración guardada' }).waitFor();
+  await navigate(page, 'week');
   assert.match(
     await page.locator('#week-content tbody tr').first().innerText(),
     /1440 min/,
   );
   await page.evaluate(() => localStorage.setItem('fail-save', '1'));
-  await page
-    .locator('summary')
-    .filter({ hasText: 'Actividades, objetivos y organización' })
-    .click();
+  await openGoals(page);
   await area.locator('[name="dailyMinutes"]').fill('70');
   await area
     .getByRole('button', { name: 'Guardar Idioma ficticio', exact: true })
@@ -159,6 +154,7 @@ try {
   });
   await page.reload();
   await page.locator('#status').filter({ hasText: 'Datos actualizados' }).waitFor();
+  await navigate(page, 'today');
   assert.match(
     await page.locator('#today-content').innerText(),
     /No hay tareas previstas/,

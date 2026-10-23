@@ -1,0 +1,29 @@
+:host {
+  display: block;
+  flex: 0 0 auto;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s);
+  padding: var(--s2);
+  border-bottom: 1px solid var(--extra-border-color);
+}
+
+a {
+  color: var(--text-color);
+  padding: var(--s) var(--s2);
+  border-radius: var(--s);
+  text-decoration: none;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--sidenav-hover-bg);
+  }
+
+  &.active {
+    background: var(--c-primary);
+    color: var(--c-contrast);
+  }
+}

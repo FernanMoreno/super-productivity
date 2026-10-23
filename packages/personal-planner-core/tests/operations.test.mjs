@@ -190,6 +190,22 @@ test('journal replay rechecks action permission while reading a finished receipt
   await assert.rejects(f.api.task(args), (error) => error.code === 'NOT_PERMITTED');
   assert.equal(f.calls(), 1);
 });
+test('a receipt permission failure after work completes leaves the mutation uncertain rather than rejected', async () => {
+  const f = fixture(),
+    cas = f.ports.cas;
+  f.ports.cas = async (key, expected, ...rest) => {
+    if (key.startsWith('op-') && expected !== null)
+      throw new PlannerError('NOT_PERMITTED', 'Revoked after work');
+    return cas(key, expected, ...rest);
+  };
+  const result = await f.api.task({
+    operationId: 'post-work-revoked',
+    fields: { title: 'Ficticia' },
+  });
+  assert.equal(result.status, 'uncertain');
+  assert.equal(result.code, 'OUTCOME_UNKNOWN');
+  assert.equal(f.calls(), 1);
+});
 test('recording time carries a final native dependency guard and rejects a profile changed before snapshot capture', async () => {
   const f = fixture(),
     snapshot = f.ports.snapshot;

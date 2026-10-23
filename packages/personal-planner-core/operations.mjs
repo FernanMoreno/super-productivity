@@ -10,15 +10,11 @@ import {
   areaGoalsOn,
   validDate,
 } from './model.mjs';
-import {
-  addDays,
-  scenario,
-  proposeActivitiesWeek,
-  localDay,
-  instant,
-} from './schedule.mjs';
+import { addDays, scenario } from './schedule.mjs';
 import { areaMetrics, effectiveArea } from './metrics.mjs';
-import { proposeNativeTasks } from './native-proposals.mjs';
+import { createReorganizationOperations } from './reorganizations.mjs';
+import { createWorkbenchOperations } from './workbench-operations.mjs';
+import { remainingCapacity } from './remaining-capacity.mjs';
 export const PROFILE_KEY = 'profile-v1';
 export class PlannerError extends Error {
   constructor(code, message) {
@@ -31,7 +27,14 @@ const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const ensure = (condition, message) => {
   if (!condition) throw new PlannerError('INVALID_ARGUMENTS', message);
 };
-const journalActions = new Set(['edit', 'task', 'log_time', 'apply']);
+const journalActions = new Set([
+  'edit',
+  'task',
+  'log_time',
+  'apply',
+  'review_advance',
+  'correct_time',
+]);
 const resultStates = new Set(['applied', 'rejected', 'conflict', 'uncertain']);
 const validOperationId = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(value);
@@ -67,13 +70,16 @@ const receiptResult = (value) => {
   const patterns = {
     code: /^[A-Z][A-Z0-9_]{0,79}$/,
     taskId: /^[A-Za-z0-9_-]{1,200}$/,
+    historyId: /^[A-Za-z0-9_-]{8,80}$/,
+    reviewId: /^[A-Za-z0-9_-]{1,200}$/,
+    baselineId: /^[A-Za-z0-9_-]{1,200}$/,
     revision: /^[a-f0-9]{64}$/,
   };
   for (const [key, pattern] of Object.entries(patterns))
     if (typeof value[key] === 'string' && pattern.test(value[key]))
       result[key] = value[key];
   if (validDate(value.date)) result.date = value.date;
-  if (Number.isSafeInteger(value.durationMs) && value.durationMs > 0)
+  if (Number.isSafeInteger(value.durationMs) && value.durationMs >= 0)
     result.durationMs = value.durationMs;
   for (const key of ['commitmentIds', 'taskIds'])
     if (
@@ -127,6 +133,34 @@ export async function contextRevision(profile, snapshot) {
   return revision({
     profile,
     civilDaysReliable: snapshot.civilDaysReliable,
+    calendarEvents: (snapshot.calendarEvents || [])
+      .map((event) =>
+        Object.fromEntries(
+          [
+            'id',
+            'calProviderId',
+            'title',
+            'start',
+            'duration',
+            'isAllDay',
+            'legacyIds',
+            'issueProviderKey',
+            'isReferenceCalendar',
+          ].map((key) => [key, event[key]]),
+        ),
+      )
+      .sort((a, b) => canonical(a).localeCompare(canonical(b))),
+    calendarWarnings: [...(snapshot.calendarWarnings || [])].sort(),
+    projects: (snapshot.projects || [])
+      .map((project) => ({
+        id: project.id,
+        title: project.title,
+        isArchived: project.isArchived,
+      }))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    tags: (snapshot.tags || [])
+      .map((tag) => ({ id: tag.id, title: tag.title }))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id))),
     tasks: [...snapshot.byId.values()]
       .map((t) => Object.fromEntries(fields.map((k) => [k, t[k]])))
       .sort((a, b) => a.id.localeCompare(b.id)),
@@ -274,13 +308,21 @@ export function applyCommand(profile, command) {
       ensure(Number.isInteger(v.index), 'Índice inválido.');
       p.trainingExclusions.splice(v.index, 1);
       break;
-    case 'preferences.update':
+    case 'preferences.update': {
       ensure(
-        Object.keys(v).every((k) => ['timezone', 'weekStartsOn'].includes(k)),
+        Object.keys(v).every((k) =>
+          ['timezone', 'weekStartsOn', 'preferences'].includes(k),
+        ),
         'Ajuste desconocido.',
       );
-      Object.assign(p, v);
+      const { preferences, ...calendar } = v;
+      if (preferences !== undefined) {
+        ensure(record(preferences), 'Preferencias inválidas.');
+        p.preferences = { ...p.preferences, ...preferences };
+      }
+      Object.assign(p, calendar);
       break;
+    }
     case 'completeness.update':
       ensure(
         Object.keys(v).every((k) => k in p.completeness),
@@ -315,7 +357,6 @@ const taskView = (t) =>
       .map((k) => [k, t[k]]),
   );
 export function createPlannerOperations(ports) {
-  const proposals = new Map();
   const load = async () => {
     const raw = await ports.read(PROFILE_KEY);
     const profile = raw === null ? emptyProfile() : migrateProfile(JSON.parse(raw));
@@ -359,19 +400,21 @@ export function createPlannerOperations(ports) {
       status: 'pending',
       createdAt: Date.now(),
     });
-    let reserved = false;
+    let reserved = false,
+      workCompleted = false;
     try {
       reserved = await ports.cas(key, null, pending);
       if (!reserved) return journal(action, args, work);
       await authorize(action);
       const result = await work();
+      workCompleted = true;
       const finished = JSON.stringify({ signature, action, result });
       if (!(await ports.cas(key, pending, finished)))
         return { status: 'uncertain', code: 'OUTCOME_UNKNOWN', operationId };
       return { ...result, operationId };
     } catch (error) {
       const result =
-        error instanceof PlannerError
+        error instanceof PlannerError && !workCompleted
           ? rejected(error.code, error.message)
           : {
               status: 'uncertain',
@@ -516,6 +559,7 @@ export function createPlannerOperations(ports) {
           return {
             date: day,
             capacity: plan.capacity,
+            remainingCapacity: remainingCapacity(p, s, day),
             workLoad: plan.workLoad,
             personalLoad: plan.personalLoad,
             workExcess: plan.workExcess,
@@ -548,163 +592,41 @@ export function createPlannerOperations(ports) {
         }),
       };
     },
-    async prepare({ from, to }) {
-      const dates = range(from, to),
-        { profile } = await load(),
-        snapshot = await ports.snapshot(profile);
-      const plans = dates.map((d) => scenario(profile, snapshot, d));
-      const items = [
-        ...[
-          ...plans.flatMap((v) => v.proposals),
-          ...proposeActivitiesWeek(profile, snapshot, dates),
-        ].map((item) => ({ ...item, target: 'commitment' })),
-        ...proposeNativeTasks(profile, snapshot, dates),
-      ].map((p) => ({ ...p, id: crypto.randomUUID() }));
-      const proposalId = crypto.randomUUID(),
-        base = await contextRevision(profile, snapshot),
-        expiresAt = Date.now() + 15 * 60000;
-      const output = {
-        proposalId,
-        contextRevision: base,
-        expiresAt,
-        proposals: items,
-        warnings: [...new Set(plans.flatMap((s) => s.capacity.warnings))],
-        conflicts: plans.map((s, i) => ({
-          date: dates[i],
-          conflicts: s.capacity.conflicts,
-          workExcess: s.workExcess,
-          personalExcess: s.personalExcess,
-        })),
-        message:
-          'Alternativas revisables: selecciona reservas del planificador o tareas nativas, por separado. No se modifica nada al preparar.',
-      };
-      for (const [id, p] of proposals) if (p.expiresAt < Date.now()) proposals.delete(id);
-      if (proposals.size >= 100)
-        throw new PlannerError(
-          'TOO_MANY_PROPOSALS',
-          'Hay demasiadas propuestas pendientes; espera a que caduquen.',
-        );
-      proposals.set(proposalId, { ...output, profile });
-      return output;
-    },
-    async apply(args) {
-      return journal('apply', args, async () => {
-        const proposal = proposals.get(args.proposalId);
-        if (!proposal || proposal.expiresAt < Date.now())
-          return rejected(
-            'STALE_PLAN',
-            'Propuesta inexistente o caducada; prepara otra.',
-          );
-        const current = await load(),
-          snapshot = await ports.snapshot(current.profile);
-        if (
-          (await contextRevision(current.profile, snapshot)) !== proposal.contextRevision
-        )
-          return {
-            status: 'conflict',
-            code: 'STALE_PLAN',
-            message: 'Cambió el perfil o las tareas; prepara otra propuesta.',
-          };
-        ensure(
-          Array.isArray(args.selection) &&
-            args.selection.length > 0 &&
-            new Set(args.selection).size === args.selection.length,
-          'Selecciona bloques sin duplicados.',
-        );
-        const selected = args.selection.map((id) =>
-          proposal.proposals.find((item) => item.id === id),
-        );
-        ensure(
-          selected.every((item) => item?.interval),
-          'Bloque no disponible.',
-        );
-        ensure(
-          new Set(selected.map((item) => item.target)).size === 1,
-          'Aplica reservas y tareas nativas por separado; no forman una transacción atómica.',
-        );
-        ensure(
-          typeof snapshot.assertCurrent === 'function',
-          'El host no permite comprobar cambios nativos al aplicar propuestas.',
-        );
-        if (selected[0].target === 'native-task') {
-          ensure(
-            typeof ports.native === 'function',
-            'El host no admite reprogramar tareas nativas.',
-          );
-          if ((await ports.read(PROFILE_KEY)) !== current.raw)
-            throw new PlannerError(
-              'STALE_PLAN',
-              'La configuración cambió antes de reprogramar las tareas.',
-            );
-          return ports.native(
-            'schedule',
-            {
-              entries: selected.map((item) => ({
-                taskId: item.taskId,
-                dueWithTime: item.interval[0],
-                expected: item.expected,
-              })),
-              assertCurrent: snapshot.assertCurrent,
-            },
-            current.profile,
-          );
-        }
-        const candidate = structuredClone(current.profile);
-        for (const id of args.selection) {
-          const item = proposal.proposals.find((p) => p.id === id);
-          ensure(item?.interval, 'Bloque no disponible.');
-          const [start, end] = item.interval;
-          ensure(
-            end > start && end - start < 86400000,
-            'Este bloque abarca 24 horas o más; divídelo en compromisos más cortos.',
-          );
-          const clock = (t) =>
-            new Intl.DateTimeFormat('en-GB', {
-              timeZone: candidate.timezone,
-              hour: '2-digit',
-              minute: '2-digit',
-              hourCycle: 'h23',
-            }).format(t);
-          const block = {
-            id: item.id,
-            title: item.title || item.area,
-            kind: 'study',
-            date: item.date || localDay(start, candidate.timezone),
-            start: clock(start),
-            end: clock(end),
-            areaId: item.areaId || '',
-            sourceId: item.sourceId || '',
-            scope: item.scope,
-            weekdays: [],
-            excludedDates: [],
-          };
-          try {
-            ensure(
-              instant(block.date, block.start, candidate.timezone) === start &&
-                instant(
-                  block.end <= block.start ? addDays(block.date, 1) : block.date,
-                  block.end,
-                  candidate.timezone,
-                ) === end,
-              'El bloque no se puede representar con estas horas locales.',
-            );
-          } catch (error) {
-            throw new PlannerError('INVALID_ARGUMENTS', error.message);
-          }
-          candidate.commitments.push(block);
-        }
-        ensure(
-          typeof snapshot.assertCurrent === 'function',
-          'El host no permite comprobar cambios nativos al aplicar propuestas.',
-        );
-        const result = await commit(current, candidate, 'apply', snapshot.assertCurrent);
-        return { ...result, commitmentIds: args.selection };
-      });
-    },
+    prepare: (args) => reorganizations.prepare(args),
+    adjustProposal: (args) => reorganizations.adjustProposal(args),
+    history: (args) => reorganizations.history(args),
+    prepareUndo: (args) => reorganizations.prepareUndo(args),
+    apply: (args) => reorganizations.apply(args),
     async contextRevision() {
       const { profile } = await load();
       return contextRevision(profile, await ports.snapshot(profile));
     },
   };
+  const reorganizations = createReorganizationOperations({
+    ports,
+    load,
+    authorize,
+    journal,
+    commit,
+    range,
+    contextRevision,
+    PlannerError,
+    captureBaseline: (args) => api.captureBaseline?.(args),
+  });
+  Object.assign(
+    api,
+    createWorkbenchOperations({
+      ports,
+      load,
+      authorize,
+      journal,
+      query: api.query,
+      task: api.task,
+      range,
+      revision,
+      contextRevision,
+      PlannerError,
+    }),
+  );
   return api;
 }

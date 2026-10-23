@@ -5,6 +5,27 @@ const os = require('node:os');
 const path = require('node:path');
 const { pluginAssets, buildPlugin } = require('./build-packages.js');
 const assets = ['manifest.json', 'index.html', 'LICENSE', 'NOTICE'];
+
+test('uploaded QuestArc adaptation builds without copying it into host assets', async () => {
+  const { getPlugins } = require('./build-packages.js');
+  const plugin = (await getPlugins()).find((p) => p.name === 'quest-arc-compat');
+  assert.equal(plugin.skipCopy, true);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sp-uploaded-plugin-'));
+  const previous = process.cwd();
+  try {
+    process.chdir(root);
+    assert.equal(
+      (await buildPlugin({ ...plugin, path: root, buildCommand: undefined })).success,
+      true,
+    );
+    await assert.rejects(
+      fs.access(path.join(root, 'src/assets/bundled-plugins/quest-arc-compat')),
+    );
+  } finally {
+    process.chdir(previous);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 test('explicit plugin assets replace inferred runtime and translation files', () => {
   const result = pluginAssets({ superProductivity: { pluginAssets: assets } });
   assert.deepEqual(result, assets);

@@ -105,12 +105,168 @@ const active = (a, date) =>
   areaStateOn(a, date) === 'active' && areaCompletionOn(a, date) !== 'completed';
 const occupied = (e) => !['available', 'absence', 'flexible'].includes(e.kind);
 const scopeIncludes = (e, scope) => !e.scope || e.scope === 'all' || e.scope === scope;
-export function daySchedule(profile, day) {
+const hasTransition = (e) =>
+  ['work', 'busy', 'study', 'extra'].includes(e.kind) && !e.allDay;
+const workStudy = (profile, e) =>
+  e.kind === 'study' &&
+  (profile.areas.find((a) => a.id === e.areaId)?.workTime ||
+    (!e.areaId && e.scope === 'work'));
+const containedTraining = (profile, w, s) => w.kind === 'work' && workStudy(profile, s);
+
+/** Native calendar cache stays outside the persisted planner profile. */
+export function calendarEventsForDay(profile, snapshot = {}, day) {
+  const zone = profile.timezone || ZONE,
+    start = instant(day, '00:00', zone),
+    end = instant(addDays(day, 1), '00:00', zone);
+  const warnings = Array.isArray(snapshot.calendarWarnings)
+      ? snapshot.calendarWarnings.filter((w) => typeof w === 'string')
+      : [],
+    events = [],
+    carryMargins = [],
+    seen = new Set();
+  const margin = (profile.preferences?.transitionMinutes || 0) * 60000;
+  const linked = new Set(
+    [...(snapshot.byId?.values?.() || [])]
+      .filter((t) => t.issueId && (t.issueProviderId || t.providerId))
+      .map((t) => JSON.stringify([t.issueProviderId || t.providerId, t.issueId])),
+  );
+  const cached = Array.isArray(snapshot.calendarEvents)
+    ? [...snapshot.calendarEvents].sort(
+        (a, b) =>
+          String(a?.calProviderId).localeCompare(String(b?.calProviderId)) ||
+          String(a?.id).localeCompare(String(b?.id)) ||
+          (a?.start || 0) - (b?.start || 0) ||
+          (a?.duration || 0) - (b?.duration || 0),
+      )
+    : [];
+  if (snapshot.calendarEvents !== undefined && !Array.isArray(snapshot.calendarEvents))
+    warnings.push('Caché de calendario no disponible; disponibilidad parcial.');
+  const parent = new Map();
+  const root = (key) => {
+    if (!parent.has(key)) parent.set(key, key);
+    let r = key;
+    while (parent.get(r) !== r) r = parent.get(r);
+    while (parent.get(key) !== key) {
+      const next = parent.get(key);
+      parent.set(key, r);
+      key = next;
+    }
+    return r;
+  };
+  const eventKeys = (event) =>
+    [
+      event.id,
+      ...(Array.isArray(event.legacyIds)
+        ? event.legacyIds.filter((id) => typeof id === 'string')
+        : []),
+    ].map((id) => JSON.stringify([event.calProviderId, id]));
+  for (const event of cached)
+    if (
+      event &&
+      typeof event.calProviderId === 'string' &&
+      typeof event.id === 'string' &&
+      !event.isReferenceCalendar
+    ) {
+      const keys = eventKeys(event);
+      for (const key of keys) parent.set(root(key), root(keys[0]));
+    }
+  const linkedRoots = new Set([...linked].map(root));
+  const variants = new Map();
+  for (const event of cached)
+    if (
+      event &&
+      !event.isReferenceCalendar &&
+      typeof event.calProviderId === 'string' &&
+      typeof event.id === 'string' &&
+      Number.isFinite(event.start) &&
+      event.duration > 0
+    ) {
+      const key = root(JSON.stringify([event.calProviderId, event.id]));
+      if (!variants.has(key)) variants.set(key, new Set());
+      variants
+        .get(key)
+        .add(JSON.stringify([event.start, event.duration, !!event.isAllDay]));
+    }
+  if ([...variants.values()].some((values) => values.size > 1))
+    warnings.push(
+      'Alias de calendario con intervalos distintos; selección determinista y disponibilidad provisional.',
+    );
+  for (const event of cached) {
+    if (!event || typeof event !== 'object') {
+      warnings.push('Evento de calendario inválido; disponibilidad parcial.');
+      continue;
+    }
+    if (event.isReferenceCalendar) continue;
+    const provider = event.calProviderId;
+    if (
+      typeof provider !== 'string' ||
+      !provider ||
+      typeof event.id !== 'string' ||
+      !event.id ||
+      !Number.isFinite(event.start) ||
+      !Number.isFinite(event.duration) ||
+      event.duration <= 0 ||
+      !Number.isFinite(event.start + event.duration) ||
+      Math.abs(event.start) > 8.64e15 ||
+      Math.abs(event.start + event.duration) > 8.64e15
+    ) {
+      warnings.push('Evento de calendario sin intervalo válido; disponibilidad parcial.');
+      continue;
+    }
+    const group = root(JSON.stringify([provider, event.id]));
+    if (seen.has(group) || linkedRoots.has(group)) continue;
+    seen.add(group);
+    const from = event.start,
+      to = from + event.duration;
+    if (from >= end) continue;
+    if (to <= start) {
+      if (!event.isAllDay && to + margin > start)
+        carryMargins.push({
+          kind: 'busy',
+          scope: 'all',
+          from: start,
+          to: Math.min(end, to + margin),
+        });
+      continue;
+    }
+    if (event.isAllDay) {
+      let knownCivil = false;
+      try {
+        knownCivil =
+          instant(localDay(from, zone), '00:00', zone) === from &&
+          instant(localDay(to, zone), '00:00', zone) === to;
+      } catch {}
+      if (!knownCivil)
+        warnings.push(
+          'Evento de día completo sin fecha civil inequívoca en la zona del perfil; se conserva el intervalo conocido.',
+        );
+    }
+    events.push({
+      id: 'calendar:' + JSON.stringify([provider, event.id]),
+      title: event.title || 'Evento de calendario',
+      kind: 'busy',
+      scope: 'all',
+      external: true,
+      calendarProviderId: provider,
+      calendarEventId: event.id,
+      allDay: !!event.isAllDay,
+      from: Math.max(start, from),
+      to: Math.min(end, to),
+      rawFrom: from,
+      rawTo: to,
+    });
+  }
+  return { events, warnings, carryMargins };
+}
+export function daySchedule(profile, day, snapshot = {}) {
   const zone = profile.timezone || ZONE,
     start = instant(day, '00:00', zone),
     end = instant(addDays(day, 1), '00:00', zone);
   const events = [],
-    warnings = [];
+    warnings = [],
+    carryMargins = [],
+    previousAbsences = [];
+  const margin = (profile.preferences?.transitionMinutes || 0) * 60000;
   for (const date of [addDays(day, -1), day]) {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     for (const c of profile.commitments) {
@@ -134,21 +290,52 @@ export function daySchedule(profile, day) {
         const s = instant(date, c.allDay ? '00:00' : c.start, zone);
         const endDate = c.allDay || c.end < c.start ? addDays(date, 1) : date;
         const e = instant(endDate, c.allDay ? '00:00' : c.end, zone);
+        if (c.kind === 'absence' && scopeIncludes(c, 'work'))
+          previousAbsences.push([s, e]);
         if (s < end && e > start)
           events.push({
             ...c,
             occurrenceDate: date,
+            rawFrom: s,
+            rawTo: e,
             from: Math.max(start, s),
             to: Math.min(end, e),
+          });
+        else if (
+          s < end &&
+          e <= start &&
+          e + margin > start &&
+          hasTransition(c) &&
+          !workStudy(profile, c)
+        )
+          carryMargins.push({
+            ...c,
+            ...(c.kind === 'work' ? { scope: 'personal' } : {}),
+            rawEnd: e,
+            from: start,
+            to: Math.min(end, e + margin),
           });
       } catch (error) {
         warnings.push(error.message);
       }
     }
   }
+  for (let i = carryMargins.length - 1; i >= 0; i--)
+    if (
+      carryMargins[i].kind === 'work' &&
+      previousAbsences.some(
+        ([s, e]) => s < carryMargins[i].rawEnd && e >= carryMargins[i].rawEnd,
+      )
+    )
+      carryMargins.splice(i, 1);
+  const calendar = calendarEventsForDay(profile, snapshot, day);
+  events.push(...calendar.events);
+  warnings.push(...calendar.warnings);
+  carryMargins.push(...calendar.carryMargins);
   events.sort((a, b) => a.from - b.from);
   const conflicts = [],
     transitions = [],
+    transitionConflicts = [],
     fixed = events.filter(occupied);
   for (let i = 0; i < fixed.length; i++)
     for (let j = i + 1; j < fixed.length; j++) {
@@ -156,35 +343,88 @@ export function daySchedule(profile, day) {
         b = fixed[j],
         from = Math.max(a.from, b.from),
         to = Math.min(a.to, b.to);
-      const allowed = (w, s) =>
-        w.kind === 'work' &&
-        s.kind === 'study' &&
-        (profile.areas.find((a) => a.id === s.areaId)?.workTime ||
-          (!s.areaId && s.scope === 'work'));
+      const allowed = (w, s) => containedTraining(profile, w, s);
       if (to > from && !allowed(a, b) && !allowed(b, a))
         conflicts.push({ a, b, from, to, minutes: (to - from) / 60000 });
+      const [before, after] = a.to <= b.from ? [a, b] : [b, a];
+      const gap = (after.from - before.to) / 60000;
+      if (
+        margin &&
+        hasTransition(before) &&
+        gap >= 0 &&
+        gap < margin / 60000 &&
+        !allowed(a, b) &&
+        !allowed(b, a)
+      )
+        transitionConflicts.push({
+          a: before,
+          b: after,
+          from: before.to,
+          to: after.from,
+          requiredMinutes: margin / 60000,
+          availableMinutes: gap,
+          missingMinutes: margin / 60000 - gap,
+        });
       if (a.to === b.from || b.to === a.from)
         transitions.push({ a, b, at: a.to === b.from ? a.to : b.to });
     }
-  return { events, conflicts, transitions, warnings, start, end };
+  return {
+    events,
+    conflicts,
+    transitions,
+    transitionConflicts,
+    carryMargins,
+    warnings,
+    start,
+    end,
+  };
 }
-export function availability(profile, day) {
-  const d = daySchedule(profile, day),
+export function availability(profile, day, snapshot = {}) {
+  const d = daySchedule(profile, day, snapshot),
     absences = d.events.filter((e) => e.kind === 'absence');
   const work = subtract(
     d.events.filter((e) => e.kind === 'work').map(interval),
     absences.filter((e) => scopeIncludes(e, 'work')).map(interval),
   );
   const busy = d.events.filter((e) => occupied(e) && e.kind !== 'work');
-  let workFree = subtract(
-    work,
-    busy.filter((e) => scopeIncludes(e, 'work')).map(interval),
+  const margin = (profile.preferences?.transitionMinutes || 0) * 60000;
+  const expanded = (e, scope) => {
+    let to = Math.min(d.end, (e.rawTo ?? e.to) + (hasTransition(e) ? margin : 0));
+    const containingWork = work.find(([s, t]) => s <= e.from && t >= e.to);
+    if (workStudy(profile, e) && containingWork)
+      to = scope === 'personal' ? e.to : Math.min(to, containingWork[1]);
+    return [e.from, to];
+  };
+  const carried = (scope) =>
+    d.carryMargins.filter((e) => scopeIncludes(e, scope)).map(interval);
+  const transitionWindows = Object.fromEntries(
+    ['work', 'personal'].map((scope) => [
+      scope,
+      union(
+        [
+          ...(scope === 'personal'
+            ? work.map(([s, e]) => [e, Math.min(d.end, e + margin)])
+            : []),
+          ...busy
+            .filter((e) => scopeIncludes(e, scope))
+            .map((e) => [e.to, expanded(e, scope)[1]]),
+          ...carried(scope),
+        ].filter(([s, e]) => e > s),
+      ),
+    ]),
   );
+  let workFree = subtract(work, [
+    ...busy.filter((e) => scopeIncludes(e, 'work')).map((e) => expanded(e, 'work')),
+    ...carried('work'),
+  ]);
   let personalFree = subtract(
     [[d.start, d.end]],
     [
-      ...work,
-      ...busy.filter((e) => scopeIncludes(e, 'personal')).map(interval),
+      ...work.map(([s, e]) => [s, Math.min(d.end, e + margin)]),
+      ...busy
+        .filter((e) => scopeIncludes(e, 'personal'))
+        .map((e) => expanded(e, 'personal')),
+      ...carried('personal'),
       ...absences.filter((e) => scopeIncludes(e, 'personal')).map(interval),
     ],
   );
@@ -222,6 +462,7 @@ export function availability(profile, day) {
   return {
     ...d,
     workWindows: work,
+    transitionWindows,
     workMinutes: length(workFree),
     personalMinutes: length(personalFree),
     workFree,
@@ -338,7 +579,7 @@ function studyCredit(profile, capacity, id, work) {
 // Native tasks remain the only source for task progress and recorded time.
 export function scenario(profile, snapshot, day) {
   const zone = profile.timezone || ZONE,
-    capacity = availability(profile, day),
+    capacity = availability(profile, day, snapshot),
     affected = [],
     potentiallyAffected = [],
     groups = new Map();
@@ -368,14 +609,17 @@ export function scenario(profile, snapshot, day) {
       potentiallyAffected.push(t);
     if (
       time &&
-      capacity.events.some(
+      (capacity.events.some(
         (e) =>
           (occupied(e) || e.kind === 'absence') &&
           scopeIncludes(e, work ? 'work' : 'personal') &&
           (e.kind !== 'work' || !work) &&
           time < e.to &&
           time + remainingTask(t) * 60000 > e.from,
-      )
+      ) ||
+        capacity.transitionWindows[work ? 'work' : 'personal'].some(
+          ([s, e]) => time < e && time + remainingTask(t) * 60000 > s,
+        ))
     )
       affected.push(t);
   }

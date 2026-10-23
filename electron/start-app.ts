@@ -23,6 +23,7 @@ import { initIndicator } from './indicator';
 import { quitApp, showOrFocus } from './various-shared';
 import { closeWinAndQuit, createWindow, getIsAppReady } from './main-window';
 import { IdleTimeHandler } from './idle-time-handler';
+import { IdleReturnDetector } from './idle-return-detector';
 import { destroyTaskWidget } from './task-widget/task-widget';
 import {
   initializeProtocolHandling,
@@ -362,6 +363,7 @@ export const startApp = (): void => {
     // causing timeouts and subsequent 0ms readings, which looks like "only one
     // idle event was ever sent". This ensures at most one check runs at a time.
     let isCheckingIdle = false;
+    const idleReturnDetector = new IdleReturnDetector(CONFIG.MIN_IDLE_TIME);
     const sendIdleMsgIfOverMin = (
       idleTime: number,
     ): { sent: boolean; reason?: string } => {
@@ -400,6 +402,10 @@ export const startApp = (): void => {
       const startTime = Date.now();
       try {
         const idleTime = await idleTimeHandler.getIdleTime();
+        const endedIdleTime = idleReturnDetector.sample(idleTime, Date.now());
+        if (endedIdleTime !== null && mainWin && !getIsQuiting()) {
+          mainWin.webContents.send(IPC.IDLE_END, endedIdleTime);
+        }
         const checkDuration = Date.now() - startTime;
 
         consecutiveFailures = 0;

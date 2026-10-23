@@ -1,3 +1,5 @@
+import { FormlyModule, FormlyFieldConfig } from '@ngx-formly/core';
+import { PluginService } from '../../plugins/plugin.service';
 import {
   ChangeDetectionStrategy,
   ChangeDetectorRef,
@@ -99,6 +101,7 @@ const TAB_ANIMATION_DURATION_MS = 200;
   styleUrls: ['./config-page.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    FormlyModule,
     ThemeSelectorComponent,
     ConfigSectionComponent,
     ConfigSoundFormComponent,
@@ -124,6 +127,12 @@ const TAB_ANIMATION_DURATION_MS = 200;
   ],
 })
 export class ConfigPageComponent implements OnInit {
+  readonly plannerPluginService = inject(PluginService);
+  readonly isElectron = IS_ELECTRON;
+  readonly accessFields: FormlyFieldConfig[] = [
+    { type: 'local-rest-api-settings' },
+    { type: 'assistant-access-settings' },
+  ];
   private readonly _cd = inject(ChangeDetectorRef);
   private readonly _elRef = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly _route = inject(ActivatedRoute);

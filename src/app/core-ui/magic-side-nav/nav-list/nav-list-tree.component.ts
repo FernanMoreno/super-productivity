@@ -279,7 +279,7 @@ export class NavListTreeComponent {
       id: `project-${project.id}`,
       label: project.title,
       icon,
-      route: `/project/${project.id}/tasks`,
+      route: this._navConfigService.projectRoute(project.id),
       workContext: project,
       workContextType: WorkContextType.PROJECT,
       defaultIcon: icon,

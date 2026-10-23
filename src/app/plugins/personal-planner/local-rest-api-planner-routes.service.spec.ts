@@ -2,6 +2,8 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { LocalRestApiPlannerRoutesService } from './local-rest-api-planner-routes.service';
+import { PlannerOperationsService } from './planner-operations.service';
+import { PlannerAccessService } from './planner-access.service';
 import { PluginUserPersistenceService } from '../plugin-user-persistence.service';
 import { TaskService } from '../../features/tasks/task.service';
 import { TaskArchiveService } from '../../features/archive/task-archive.service';
@@ -244,7 +246,7 @@ describe('LocalRestApiPlannerRoutesService', () => {
     expect((await data('log_time', args))['status']).toBe('applied');
     expect((await data('log_time', args))['replayed']).toBeTrue();
     expect(addTime).toHaveBeenCalledTimes(1);
-    expect(addTime.calls.mostRecent().args.slice(1)).toEqual([60000, '2026-11-01']);
+    expect(addTime.calls.mostRecent().args.slice(1)).toEqual([60000, '2026-11-01', true]);
     expect(flush).toHaveBeenCalled();
   });
   it('queries archived time without returning task notes and rejects stale archive reads', async () => {
@@ -479,5 +481,118 @@ describe('LocalRestApiPlannerRoutesService', () => {
       )['status'],
     ).toBe('uncertain');
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('LocalRestApiPlannerRoutesService workbench boundary', () => {
+  const grants: AssistantAccessScope[] = [
+    'planner:read',
+    'planner:write',
+    'tasks:read',
+    'tasks:read_history',
+    'tasks:write',
+    'time:write',
+  ];
+  let service: LocalRestApiPlannerRoutesService;
+  let operations: jasmine.SpyObj<Pick<PlannerOperationsService, 'runMcp'>>;
+  let access: jasmine.SpyObj<Pick<PlannerAccessService, 'authorize'>>;
+  const request = (
+    action: string,
+    params: Record<string, unknown> = {},
+    scopes = grants,
+  ): LocalRestApiRequestPayload => ({
+    requestId: 'workbench-boundary',
+    method: 'POST',
+    path: '/assistant/planner',
+    query: {},
+    source: 'mcp',
+    body: { action, params, grantedScopes: scopes },
+  });
+  beforeEach(() => {
+    operations = jasmine.createSpyObj<Pick<PlannerOperationsService, 'runMcp'>>(
+      'operations',
+      ['runMcp'],
+    );
+    operations.runMcp.and.resolveTo({ status: 'applied' });
+    access = jasmine.createSpyObj<Pick<PlannerAccessService, 'authorize'>>('access', [
+      'authorize',
+    ]);
+    access.authorize.and.resolveTo();
+    TestBed.configureTestingModule({
+      providers: [
+        LocalRestApiPlannerRoutesService,
+        { provide: PlannerOperationsService, useValue: operations },
+        { provide: PlannerAccessService, useValue: access },
+      ],
+    });
+    service = TestBed.inject(LocalRestApiPlannerRoutesService);
+  });
+  for (const action of [
+    'next',
+    'review',
+    'review_advance',
+    'correct_time',
+    'proposal_adjust',
+    'history',
+    'prepare_undo',
+  ]) {
+    it(`forwards ${action} through the same authorized domain service`, async () => {
+      const params = { fixture: 'fictitious-boundary-value' };
+      const result = await service.handle(request(action, params));
+      expect(result?.body.ok).toBeTrue();
+      expect(access.authorize).toHaveBeenCalledWith(action);
+      expect(operations.runMcp).toHaveBeenCalledOnceWith(action, params);
+    });
+  }
+  for (const original of ['review_advance', 'correct_time']) {
+    it(`checks original ${original} grants before reading a durable receipt`, async () => {
+      const result = await service.handle(
+        request(
+          'operation_status',
+          { action: original, operationId: 'operation-example' },
+          ['planner:read'],
+        ),
+      );
+      expect(result?.status).toBe(403);
+      expect(operations.runMcp).not.toHaveBeenCalled();
+      const allowed = await service.handle(
+        request('operation_status', {
+          action: original,
+          operationId: 'operation-example',
+        }),
+      );
+      expect(allowed?.body.ok).toBeTrue();
+      expect(access.authorize).toHaveBeenCalledWith(original);
+    });
+  }
+  it('does not expose the plugin-only calendar snapshot through MCP', async () => {
+    const result = await service.handle(request('calendar_snapshot'));
+    expect(result?.status).toBe(400);
+    expect(operations.runMcp).not.toHaveBeenCalled();
+  });
+  it('rejects workbench writes without the configured capability', async () => {
+    for (const [action, scope] of [
+      ['review_advance', 'planner:write'],
+      ['correct_time', 'time:write'],
+    ]) {
+      const result = await service.handle(
+        request(
+          action,
+          {},
+          grants.filter((entry) => entry !== scope),
+        ),
+      );
+      expect(result?.status).toBe(403);
+    }
+    expect(operations.runMcp).not.toHaveBeenCalled();
+  });
+  it('keeps the confirmed domain mutation outcome without a misleading second authorization', async () => {
+    operations.runMcp.and.resolveTo({
+      status: 'applied',
+      operationId: 'confirmed-example',
+    });
+    const result = await service.handle(request('review_advance'));
+    expect(result?.body.ok).toBeTrue();
+    expect(access.authorize).toHaveBeenCalledTimes(1);
   });
 });

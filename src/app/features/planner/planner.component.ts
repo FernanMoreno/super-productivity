@@ -1,3 +1,4 @@
+import { WorkspaceNavComponent } from '../../pages/workspace-nav.component';
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { DateService } from '../../core/date/date.service';
@@ -19,6 +20,7 @@ import { selectPlannerDayMap } from './store/planner.selectors';
   styleUrl: './planner.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    WorkspaceNavComponent,
     CdkDropListGroup,
     PlannerPlanViewComponent,
     CdkScrollable,

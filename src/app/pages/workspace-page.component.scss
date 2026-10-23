@@ -1,0 +1,25 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+header {
+  flex: 0 0 auto;
+
+  h1.workspace-title {
+    margin: var(--s2) var(--s3) 0;
+    font-size: 1.25rem;
+  }
+}
+
+plugin-index {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.unavailable {
+  padding: var(--s3);
+}

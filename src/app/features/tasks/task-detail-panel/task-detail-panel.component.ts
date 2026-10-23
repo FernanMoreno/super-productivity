@@ -1,3 +1,5 @@
+import { RouterLink } from '@angular/router';
+import { PluginService } from '../../../plugins/plugin.service';
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
@@ -107,6 +109,7 @@ import { isWontDoTask } from '../util/is-wont-do-task';
     fadeAnimation,
   ],
   imports: [
+    RouterLink,
     TaskTitleComponent,
     TaskDetailItemComponent,
     MatIcon,
@@ -131,6 +134,8 @@ import { isWontDoTask } from '../util/is-wont-do-task';
   ],
 })
 export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestroy {
+  readonly plannerPluginService = inject(PluginService);
+
   private readonly _elementRef = inject<ElementRef<HTMLElement>>(ElementRef);
   // Services
   attachmentService = inject(TaskAttachmentService);

@@ -1,4 +1,5 @@
-import { localDay, weekDays } from './schedule.mjs';
+import { areaGoalsOn, areaStateOn, areaCompletionOn, validDate } from './model.mjs';
+import { localDay, weekDays, addDays, availability, restricted } from './schedule.mjs';
 export function taskSnapshot(active, archived) {
   const byId = new Map();
   for (const [list, isArchive] of [
@@ -99,4 +100,85 @@ export function effectiveArea(profile, area) {
     projectIds: [...new Set(included.flatMap((a) => a.projectIds))],
     tagIds: [...new Set(included.flatMap((a) => a.tagIds))],
   };
+}
+
+/** A deadline is a pacing aid, never evidence of course completion. */
+export function goalPace(profile, snapshot, area, day, goal = {}) {
+  const dueDate = goal.date || area.dueDate,
+    hours = goal.hours ?? areaGoalsOn(area, day).targetHours;
+  const out = {
+    dueDate: dueDate || null,
+    remainingMinutes: null,
+    daysRemaining: null,
+    requiredMinutesPerDay: null,
+    availableMinutes: null,
+    partial: true,
+    warnings: [],
+    status: 'unconfigured',
+  };
+  if (!validDate(dueDate) || hours == null) return out;
+  if (!validDate(day) || !Number.isFinite(hours) || hours < 0)
+    return {
+      ...out,
+      status: 'unknown',
+      warnings: ['Falta una fecha u objetivo numérico válido.'],
+    };
+  if (dueDate < day)
+    return {
+      ...out,
+      status: 'past',
+      daysRemaining: 0,
+      warnings: ['La fecha objetivo ya ha pasado; conserva el dato y revísalo.'],
+    };
+  const mapped = effectiveArea(profile, area),
+    metrics = areaMetrics(snapshot, mapped, day);
+  out.daysRemaining =
+    Math.round(
+      (Date.parse(dueDate + 'T12:00Z') - Date.parse(day + 'T12:00Z')) / 86400000,
+    ) + 1;
+  if ((!mapped.projectIds.length && !mapped.tagIds.length) || metrics.incomplete)
+    return {
+      ...out,
+      status: 'unknown',
+      warnings: ['Faltan asociaciones o registros completos para calcular el ritmo.'],
+    };
+  out.remainingMinutes = Math.max(0, hours * 60 - metrics.totalMinutes);
+  out.requiredMinutesPerDay = out.remainingMinutes / out.daysRemaining;
+  out.status = 'configured';
+  if (out.daysRemaining > 366)
+    return {
+      ...out,
+      warnings: ['Capacidad no calculada para horizontes de más de 366 días.'],
+    };
+  out.availableMinutes = 0;
+  out.partial = false;
+  for (let date = day; date <= dueDate; date = addDays(date, 1)) {
+    const capacity = availability(profile, date, snapshot);
+    out.partial ||= capacity.partial;
+    if (
+      areaStateOn(area, date) !== 'active' ||
+      areaCompletionOn(area, date) === 'completed' ||
+      profile.trainingExclusions.some(
+        (e) => e.areaId === area.id && date >= e.start && date <= e.end,
+      )
+    )
+      continue;
+    try {
+      const free = restricted(
+        area.workTime ? capacity.workFree : capacity.personalFree,
+        area,
+        date,
+        profile.timezone,
+      );
+      out.availableMinutes += free.reduce((total, [s, e]) => total + (e - s) / 60000, 0);
+    } catch (error) {
+      out.partial = true;
+      out.warnings.push(error.message);
+    }
+  }
+  if (out.partial)
+    out.warnings.push(
+      'La disponibilidad es parcial; el ritmo no garantiza que el objetivo sea viable.',
+    );
+  return out;
 }

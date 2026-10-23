@@ -159,6 +159,8 @@ const mapIssue = (card: TrelloCard): PluginIssue => {
     comments: [],
 
     // Extended fields for display + field mappings.
+    idBoard: card.idBoard,
+    idList: card.idList,
     key,
     summary: `${key} ${card.name}`.trim(),
     statusLabel: card.closed ? 'Closed' : 'Open',
@@ -427,6 +429,52 @@ registerIssueProvider({
     _config: Record<string, unknown>,
     http: PluginHttp,
   ): Promise<void> {
+    if (
+      'idList' in changes ||
+      'expectedListId' in changes ||
+      'expectedBoardId' in changes
+    ) {
+      const idList = changes['idList'];
+      const expectedListId = changes['expectedListId'];
+      const expectedBoardId = changes['expectedBoardId'];
+      const isValidId = (value: unknown): value is string =>
+        typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+      if (
+        !isValidId(id) ||
+        !isValidId(idList) ||
+        !isValidId(expectedListId) ||
+        !isValidId(expectedBoardId) ||
+        'state' in changes ||
+        'title' in changes
+      ) {
+        throw new Error('Invalid Trello list movement request');
+      }
+
+      // Re-read remote state at the write boundary: the host's cached issue and
+      // destination options may have changed since the user selected a list.
+      const cardUrl = `${TRELLO_API}/cards/${encodeURIComponent(id)}`;
+      const card = await http.get<Pick<TrelloCard, 'idBoard' | 'idList' | 'closed'>>(
+        cardUrl,
+        { params: { fields: 'idBoard,idList,closed' } },
+      );
+      if (
+        card?.idBoard !== expectedBoardId ||
+        card?.idList !== expectedListId ||
+        card?.closed !== false
+      ) {
+        throw new Error('Trello card changed or is archived; refresh before moving');
+      }
+      const list = await http.get<{ idBoard: string; closed: boolean }>(
+        `${TRELLO_API}/lists/${encodeURIComponent(idList)}`,
+        { params: { fields: 'idBoard,closed' } },
+      );
+      if (list?.idBoard !== expectedBoardId || list?.closed !== false) {
+        throw new Error('Trello destination list must be open and on the same board');
+      }
+      await http.put(cardUrl, { idList });
+      return;
+    }
+
     const cardChanges: Record<string, unknown> = {};
     if ('state' in changes) {
       cardChanges['closed'] = changes['state'] === 'closed';

@@ -1,4 +1,5 @@
 import { inject, Injectable } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
 import { createEffect, ofType } from '@ngrx/effects';
 import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
 import { skipWhileApplyingRemoteOps } from '../../../util/skip-during-sync.operator';
@@ -14,6 +15,7 @@ import { UiHelperService } from '../../ui-helper/ui-helper.service';
 import { IS_ELECTRON } from '../../../app.constants';
 import {
   idleDialogResult,
+  freezeIdleTime,
   openIdleDialog,
   resetIdle,
   setIdleTime,
@@ -32,10 +34,10 @@ import {
   withLatestFrom,
 } from 'rxjs/operators';
 import { lazySetInterval } from '../../../../../electron/shared-with-frontend/lazy-set-interval';
-import { EMPTY, iif, Observable, of } from 'rxjs';
+import { EMPTY, fromEvent, iif, merge, Observable, of } from 'rxjs';
 import { IPC } from '../../../../../electron/shared-with-frontend/ipc-events.const';
 import { SimpleCounterService } from '../../simple-counter/simple-counter.service';
-import { selectIdleTime, selectIsIdle } from './idle.selectors';
+import { selectIdleTime, selectIsIdle, selectIsIdleTimeFrozen } from './idle.selectors';
 import { turnOffAllSimpleCounterCounters } from '../../simple-counter/store/simple-counter.actions';
 import { DialogIdleComponent } from '../dialog-idle/dialog-idle.component';
 import { selectIdleConfig } from '../../config/store/global-config.reducer';
@@ -50,7 +52,7 @@ import { isNotNullOrUndefined } from '../../../util/is-not-null-or-undefined';
 import { DialogConfirmComponent } from '../../../ui/dialog-confirm/dialog-confirm.component';
 import { T } from '../../../t.const';
 import { DateService } from '../../../core/date/date.service';
-import { ipcIdleTime$ } from '../../../core/ipc-events';
+import { ipcIdleEnd$, ipcIdleTime$ } from '../../../core/ipc-events';
 import { selectIsSessionRunning } from '../../focus-mode/store/focus-mode.selectors';
 import {
   completeFocusSession,
@@ -79,6 +81,56 @@ export class IdleEffects {
 
   private _clearIdlePollInterval?: () => void;
   private _isDialogOpen: boolean = false;
+  private _document = inject(DOCUMENT);
+  private _lastLocalActivity: number | null = null;
+  private _idleActivityBoundary: number | null = null;
+
+  // WSL desktop input is not always reflected by the Windows idle provider.
+  // Local trusted input is an independent, more recent activity boundary.
+  recordLocalActivity$ = createEffect(
+    () =>
+      merge(
+        fromEvent(this._document, 'pointermove', { capture: true, passive: true }),
+        fromEvent(this._document, 'pointerdown', { capture: true, passive: true }),
+        fromEvent(this._document, 'keydown', { capture: true }),
+      ).pipe(
+        filter((event) => event.isTrusted),
+        tap(() => (this._lastLocalActivity = Date.now())),
+      ),
+    { dispatch: false },
+  );
+
+  private _boundToLocalActivity(
+    idleTime: number,
+    boundary = this._lastLocalActivity,
+  ): number {
+    return boundary === null
+      ? idleTime
+      : Math.min(idleTime, Math.max(0, Date.now() - boundary));
+  }
+
+  // A desktop return may arrive while sync is still deferring dialog creation.
+  // Keep the fixed duration in runtime state so initialization cannot restart it.
+  freezeIdleOnDesktopReturn$ = createEffect(() =>
+    ipcIdleEnd$.pipe(
+      withLatestFrom(this._store.select(selectIsIdle)),
+      filter(([, isIdle]) => isIdle),
+      map(([idleTime]) =>
+        freezeIdleTime({
+          idleTime: this._boundToLocalActivity(idleTime, this._idleActivityBoundary),
+        }),
+      ),
+    ),
+  );
+
+  freezeIdleTime$ = createEffect(
+    () =>
+      this.actions$.pipe(
+        ofType(freezeIdleTime),
+        tap(() => this._cancelIdlePoll()),
+      ),
+    { dispatch: false },
+  );
 
   // NOTE: needs to live forever since we can't unsubscribe from ipcEvent$
   private _isFocusSessionRunning$ = this._store.select(selectIsSessionRunning);
@@ -109,6 +161,8 @@ export class IdleEffects {
   // - It uses Date.now() with a fixed reference point (idleStart) for precise calculation
   // - The IPC system idle time resets whenever the user moves the mouse slightly
   // - We want to show "total time away" not "current system idle time"
+  // A separate return event or trusted input in the dialog freezes this timer;
+  // the user can review the fixed period without counting review time as absence.
   //
   // By filtering when isIdle=true, we let the internal poll timer control the display
   // while the dialog is open, preventing the flickering between two different values.
@@ -153,8 +207,12 @@ export class IdleEffects {
                   ) {
                     return of(resetIdle());
                   }
-                  const idleTime = idleTimeInMs as number;
-                  return idleTime >= minIdleTime ? of(triggerIdle({ idleTime })) : EMPTY;
+                  const idleTime = this._boundToLocalActivity(idleTimeInMs as number);
+                  if (idleTime >= minIdleTime) {
+                    this._idleActivityBoundary = this._lastLocalActivity;
+                    return of(triggerIdle({ idleTime }));
+                  }
+                  return EMPTY;
                 }),
               ),
       ),
@@ -304,6 +362,9 @@ export class IdleEffects {
           isResetBreakTimer,
         }) => {
           this._cancelIdlePoll();
+          // An explicit review completes this absence even if the host still
+          // reports its old cumulative duration. Never count that portion twice.
+          this._lastLocalActivity = Date.now();
           // handle dialog result weirdness :(
           if (!trackItems) {
             devError('No track items ???');
@@ -412,6 +473,9 @@ export class IdleEffects {
   // }
 
   private _initIdlePoll(initialIdleTime: number): void {
+    if (this._store.selectSignal(selectIsIdleTimeFrozen)()) {
+      return;
+    }
     const idleStart = Date.now();
     this._store.dispatch(setIdleTime({ idleTime: initialIdleTime }));
 

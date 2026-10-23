@@ -1,0 +1,14 @@
+{
+  "name": "quest-arc-compat",
+  "version": "2.2.0-compat.1",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "superProductivity": {
+    "skipCopy": true
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/build.mjs"
+  }
+}

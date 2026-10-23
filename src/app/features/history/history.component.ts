@@ -1,3 +1,4 @@
+import { WorkspaceNavComponent } from '../../pages/workspace-nav.component';
 import { ChangeDetectionStrategy, Component, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { expandFadeAnimation } from '../../ui/animations/expand.ani';
@@ -46,6 +47,7 @@ import { DialogRecentlyDeletedComponent } from '../tasks/recently-deleted/dialog
   changeDetection: ChangeDetectionStrategy.OnPush,
   animations: [expandFadeAnimation, fadeInSlowAnimation],
   imports: [
+    WorkspaceNavComponent,
     FullPageSpinnerComponent,
     MatButton,
     MatMiniFabButton,

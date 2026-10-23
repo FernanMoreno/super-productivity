@@ -1,5 +1,8 @@
 import { ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { ScheduleComponent } from './schedule.component';
+import { WorkspaceNavComponent } from '../../../pages/workspace-nav.component';
+import { WorkContextService } from '../../work-context/work-context.service';
+import { PluginService } from '../../../plugins/plugin.service';
 import { TaskService } from '../../tasks/task.service';
 import { LayoutService } from '../../../core-ui/layout/layout.service';
 import { ScheduleService } from '../schedule.service';
@@ -133,7 +136,17 @@ describe('ScheduleComponent', () => {
         { provide: GlobalConfigService, useValue: mockGlobalConfigService },
         { provide: DateAdapter, useValue: { getFirstDayOfWeek: () => 1 } },
       ],
-    }).compileComponents();
+    })
+      .overrideComponent(WorkspaceNavComponent, {
+        set: {
+          template: '',
+          providers: [
+            { provide: WorkContextService, useValue: { activeWorkContext$: of(null) } },
+            { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
+          ],
+        },
+      })
+      .compileComponents();
 
     fixture = TestBed.createComponent(ScheduleComponent);
     component = fixture.componentInstance;

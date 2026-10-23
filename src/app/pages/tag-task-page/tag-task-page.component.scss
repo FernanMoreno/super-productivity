@@ -1,0 +1,13 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+work-view {
+  display: block;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}

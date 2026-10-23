@@ -168,6 +168,13 @@ const DEFAULT_ARCHIVE: ArchiveModel = {
   lastTimeTrackingFlush: 0,
 };
 
+/** Optional host guards; ordinary archive callers retain their existing behavior. */
+export interface ArchiveMoveGuards {
+  beforeWrite?: () => Promise<void>;
+  atWrite?: () => void;
+  beforeRemove?: () => void;
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -188,14 +195,18 @@ export class ArchiveService {
 
   // NOTE: we choose this method as trigger to check for flushing to archive, since
   // it is usually triggered every work-day once
-  moveTasksToArchiveAndFlushArchiveIfDue(tasks: TaskWithSubTasks[]): Promise<void> {
+  moveTasksToArchiveAndFlushArchiveIfDue(
+    tasks: TaskWithSubTasks[],
+    guards?: ArchiveMoveGuards,
+  ): Promise<void> {
     return this._runTaskArchiveMutation(() =>
-      this._moveTasksToArchiveAndFlushArchiveIfDue(tasks),
+      this._moveTasksToArchiveAndFlushArchiveIfDue(tasks, guards),
     );
   }
 
   private async _moveTasksToArchiveAndFlushArchiveIfDue(
     tasks: TaskWithSubTasks[],
+    guards?: ArchiveMoveGuards,
   ): Promise<void> {
     const now = Date.now();
     const sanitizedTasks = sanitizeTasksForArchiving(tasks, 'moveToArchive');
@@ -240,6 +251,8 @@ export class ArchiveService {
       // This is different from lastTimeTrackingFlush which tracks young→old flushes.
       lastFlush: now,
     };
+    if (guards?.beforeWrite) await guards.beforeWrite();
+    guards?.atWrite?.();
     await this._archiveDbAdapter.saveArchiveYoung(newArchiveYoung);
 
     Log.log('[ArchiveService] Saved tasks to archiveYoung:', {

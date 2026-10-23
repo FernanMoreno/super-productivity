@@ -99,7 +99,10 @@
         }
       } @else {
         <div class="task-list-wrapper">
-          @if (!(workContextService.isHasTasksToWorkOn$ | async)) {
+          @if (
+            !(workContextService.isHasTasksToWorkOn$ | async) &&
+            !(isProjectContext() && isShowOverduePanel())
+          ) {
             <div
               @expandFade
               class="add-more-or-finish"
@@ -117,31 +120,74 @@
                     alt=""
                   />
                 </div>
-                <h2 class="no-tasks-label">
-                  @if (
-                    hasDoneTasks() || (workContextService.doneTodayArchived$ | async)
-                  ) {
-                    {{ T.WW.NO_PLANNED_TASK_ALL_DONE | translate }}
-                  } @else {
-                    {{ T.WW.NO_PLANNED_TASKS | translate }}
-                  }
-                </h2>
-              </div>
-
-              @if (!overdueTasks().length) {
-                <div class="btn-wrapper">
+                <div class="empty-task-actions">
+                  <h2 class="no-tasks-label">
+                    @if (
+                      hasDoneTasks() || (workContextService.doneTodayArchived$ | async)
+                    ) {
+                      {{ T.WW.NO_PLANNED_TASK_ALL_DONE | translate }}
+                    } @else {
+                      {{ T.WW.NO_PLANNED_TASKS | translate }}
+                    }
+                  </h2>
                   <button
                     (click)="layoutService.showAddTaskBar()"
-                    color=""
-                    mat-stroked-button
+                    color="primary"
+                    mat-flat-button
                   >
-                    <mat-icon>playlist_add</mat-icon>
-                    {{ T.WW.ADD_MORE | translate }}
+                    <mat-icon>add</mat-icon>
+                    {{ T.F.TASK.ADD_TASK_BAR.TOOLTIP_ADD_TASK | translate }}
                   </button>
                 </div>
-              }
+              </div>
             </div>
           }
+          @if (isShowOverduePanel()) {
+            <section
+              class="overdue-tasks"
+              @expandFade
+            >
+              <!-- OVERDUE Outline -->
+              <collapsible
+                class="task-section"
+                icon="event_busy"
+                [title]="(T.G.OVERDUE | translate) + ' (' + overdueTasks().length + ')'"
+                [isExpanded]="!isOverdueHidden()"
+                (isExpandedChange)="isOverdueHidden.set(!$event)"
+                [isIconBefore]="true"
+                [isGroup]="true"
+              >
+                <div class="overdue-btn-wrapper">
+                  <button
+                    mat-stroked-button
+                    color="primary"
+                    (click)="addAllOverdueToMyDay()"
+                  >
+                    <mat-icon>wb_sunny</mat-icon>
+                    {{ T.F.TASK.CMP.ADD_TO_MY_DAY | translate }}
+                  </button>
+                  <!--                <button-->
+                  <!--                  mat-stroked-button-->
+                  <!--                  color="primary"-->
+                  <!--                  tabindex="1"-->
+                  <!--                >-->
+                  <!--                  <mat-icon>edit_calendar</mat-icon>-->
+                  <!--                  {{ T.F.PLANNER.D.ADD_PLANNED.RE_PLAN_ALL | translate }}-->
+                  <!--                </button>-->
+                </div>
+
+                <div>
+                  <task-list
+                    [tasks]="overdueTasks()"
+                    [isSortingDisabled]="true"
+                    listId="PARENT"
+                    listModelId="OVERDUE"
+                  ></task-list>
+                </div>
+              </collapsible>
+            </section>
+          }
+
           <!-- Keep this @if chain and the panels below in lockstep with
                _expandCollapsedContainerFor(): the search reveal has to open
                whichever container holds the target, and it mirrors these
@@ -244,6 +290,44 @@
                   </div>
                 }
               </div>
+            } @else if (isProjectContext() || isOnTodayList()) {
+              @for (group of projectDateGroups(); track group.key) {
+                <section
+                  class="date-task-group"
+                  [class.is-today]="group.kind === 'today'"
+                  [attr.data-date-group]="group.kind"
+                >
+                  <header class="date-task-heading">
+                    <mat-icon>{{
+                      group.kind === 'today'
+                        ? 'wb_sunny'
+                        : group.kind === 'unscheduled'
+                          ? 'event_available'
+                          : 'event'
+                    }}</mat-icon>
+                    <h3>
+                      {{
+                        group.kind === 'unscheduled'
+                          ? (T.F.BOARDS.FORM.SCHEDULED_STATE_NOT_SCHEDULED | translate)
+                          : (group.key | scheduledDateGroup: todayStr())
+                      }}
+                    </h3>
+                    <span class="date-task-count">{{ group.tasks.length }}</span>
+                    @if (group.kind !== 'unscheduled') {
+                      <time [attr.datetime]="group.key">{{
+                        group.key | date: 'dd/MM/yyyy'
+                      }}</time>
+                    }
+                  </header>
+                  <task-list
+                    class="tour-undoneList"
+                    [tasks]="group.tasks"
+                    listId="PARENT"
+                    listModelId="UNDONE"
+                    [groupTagId]="null"
+                  ></task-list>
+                </section>
+              }
             } @else {
               <task-list
                 class="tour-undoneList"
@@ -252,51 +336,6 @@
                 listModelId="UNDONE"
               ></task-list>
             }
-          }
-
-          @if (isShowOverduePanel()) {
-            <section
-              class="overdue-tasks"
-              @expandFade
-            >
-              <!-- OVERDUE Outline -->
-              <collapsible
-                class="task-section"
-                [title]="(T.G.OVERDUE | translate) + ' (' + overdueTasks().length + ')'"
-                [isExpanded]="!isOverdueHidden()"
-                (isExpandedChange)="isOverdueHidden.set(!$event)"
-                [isIconBefore]="true"
-                [isGroup]="true"
-              >
-                <div class="overdue-btn-wrapper">
-                  <button
-                    mat-stroked-button
-                    color="primary"
-                    (click)="addAllOverdueToMyDay()"
-                  >
-                    <mat-icon>wb_sunny</mat-icon>
-                    {{ T.F.TASK.CMP.ADD_TO_MY_DAY | translate }}
-                  </button>
-                  <!--                <button-->
-                  <!--                  mat-stroked-button-->
-                  <!--                  color="primary"-->
-                  <!--                  tabindex="1"-->
-                  <!--                >-->
-                  <!--                  <mat-icon>edit_calendar</mat-icon>-->
-                  <!--                  {{ T.F.PLANNER.D.ADD_PLANNED.RE_PLAN_ALL | translate }}-->
-                  <!--                </button>-->
-                </div>
-
-                <div>
-                  <task-list
-                    [tasks]="overdueTasks()"
-                    [isSortingDisabled]="true"
-                    listId="PARENT"
-                    listModelId="OVERDUE"
-                  ></task-list>
-                </div>
-              </collapsible>
-            </section>
           }
 
           @if (
@@ -392,11 +431,14 @@
           @if (isShowRepeatCfgsPanel()) {
             <div
               @expand
-              class="collapsible-section"
+              class="collapsible-section recurring-settings-group"
             >
               <collapsible
                 class="task-section"
+                icon="settings"
                 [title]="
+                  (T.MH.SETTINGS | translate) +
+                  ' · ' +
                   (T.WW.RECURRING_TASKS | translate) +
                   ' (' +
                   repeatCfgsForContext().length +
@@ -473,7 +515,7 @@
         <split
           (posChanged)="splitInputPos = $event"
           [containerEl]="containerEl"
-          [counter]="$safeNavigationMigration(backlogTasks()?.length)"
+          [counter]="$safeNavigationMigration(visibleBacklogTasks().length)"
           [isAnimateBtn]="isTriggerBacklogIconAni$ | async"
           [splitBottomEl]="splitBottomEl"
           [splitPos]="splitInputPos"
@@ -486,7 +528,7 @@
           >
             <backlog
               (closeBacklog)="splitInputPos = 100"
-              [backlogTasks]="backlogTasks()"
+              [backlogTasks]="visibleBacklogTasks()"
             ></backlog>
           </div>
         }
