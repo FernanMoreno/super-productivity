@@ -1,3 +1,4 @@
+import { setIsApplyingRemoteOps } from '../op-log/capture/operation-capture.meta-reducer';
 import { TestBed } from '@angular/core/testing';
 import { provideMockStore, MockStore } from '@ngrx/store/testing';
 import { PluginUserPersistenceService } from './plugin-user-persistence.service';
@@ -85,6 +86,111 @@ describe('PluginUserPersistenceService', () => {
         /Plugin data exceeds maximum size/,
       );
       expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('should acknowledge coalesced callers only after the latest value dispatches', async () => {
+      jasmine.clock().install();
+      jasmine.clock().mockDate(new Date('2026-01-01T12:00:00Z'));
+      try {
+        await service.persistPluginUserData('test-plugin', 'first');
+        let acknowledgements = 0;
+        const second = service
+          .persistPluginUserData('test-plugin', 'second')
+          .then(() => acknowledgements++);
+        const third = service
+          .persistPluginUserData('test-plugin', 'third')
+          .then(() => acknowledgements++);
+        await drainAsync();
+        expect(acknowledgements).toBe(0);
+        jasmine.clock().tick(MIN_PLUGIN_PERSIST_INTERVAL_MS);
+        await Promise.all([second, third]);
+        expect(acknowledgements).toBe(2);
+        expect(dispatchSpy).toHaveBeenCalledTimes(2);
+        expect(dispatchSpy.calls.mostRecent().args[0]).toEqual(
+          upsertPluginUserData({ pluginUserData: { id: 'test-plugin', data: 'third' } }),
+        );
+      } finally {
+        jasmine.clock().uninstall();
+      }
+    });
+
+    it('should reject a queued save cancelled by removal', async () => {
+      jasmine.clock().install();
+      jasmine.clock().mockDate(new Date('2026-01-01T12:00:00Z'));
+      try {
+        await service.persistPluginUserData('test-plugin', 'first');
+        const pending = service.persistPluginUserData('test-plugin', 'second');
+        const assertion = expectAsync(pending).toBeRejectedWithError(/cancelled/);
+        const remove = service.removePluginUserData('test-plugin');
+        await drainAsync();
+        jasmine.clock().tick(0);
+        await remove;
+        await assertion;
+        jasmine.clock().tick(MIN_PLUGIN_PERSIST_INTERVAL_MS);
+        await drainAsync();
+        expect(
+          dispatchSpy.calls
+            .allArgs()
+            .filter(([action]) => action.type === upsertPluginUserData.type).length,
+        ).toBe(1);
+      } finally {
+        jasmine.clock().uninstall();
+      }
+    });
+
+    it('rejects a save during remote application rather than acknowledging an uncounted deferred action', async () => {
+      setIsApplyingRemoteOps(true);
+      try {
+        await expectAsync(
+          service.persistPluginUserData('test-plugin', 'data'),
+        ).toBeRejectedWithError(/sync/);
+        expect(dispatchSpy).not.toHaveBeenCalled();
+      } finally {
+        setIsApplyingRemoteOps(false);
+      }
+    });
+
+    it('keeps a new batch pending when a write arrives during the previous dispatch', async () => {
+      jasmine.clock().install();
+      jasmine.clock().mockDate(new Date('2026-01-01T12:00:00Z'));
+      try {
+        await service.persistPluginUserData('test-plugin', 'first');
+        let nextBatch: Promise<void> | undefined;
+        let nextAcknowledged = false;
+        dispatchSpy.and.callFake((action) => {
+          if (action.pluginUserData?.data === 'second') {
+            nextBatch = service.persistPluginUserData('test-plugin', 'third').then(() => {
+              nextAcknowledged = true;
+            });
+          }
+        });
+        const second = service.persistPluginUserData('test-plugin', 'second');
+        jasmine.clock().tick(MIN_PLUGIN_PERSIST_INTERVAL_MS);
+        await second;
+        expect(nextBatch).toBeDefined();
+        expect(nextAcknowledged).toBeFalse();
+        jasmine.clock().tick(MIN_PLUGIN_PERSIST_INTERVAL_MS);
+        await nextBatch;
+        expect(nextAcknowledged).toBeTrue();
+        expect(dispatchSpy.calls.mostRecent().args[0].pluginUserData.data).toBe('third');
+      } finally {
+        jasmine.clock().uninstall();
+      }
+    });
+
+    it('propagates a coalesced dispatch failure to its callers', async () => {
+      jasmine.clock().install();
+      jasmine.clock().mockDate(new Date('2026-01-01T12:00:00Z'));
+      try {
+        await service.persistPluginUserData('test-plugin', 'first');
+        dispatchSpy.and.throwError('dispatch failed');
+        const pending = service.persistPluginUserData('test-plugin', 'second');
+        const assertion = expectAsync(pending).toBeRejectedWithError('dispatch failed');
+        jasmine.clock().tick(MIN_PLUGIN_PERSIST_INTERVAL_MS);
+        await assertion;
+      } finally {
+        jasmine.clock().uninstall();
+      }
     });
 
     it('should coalesce a rapid second call instead of dropping it', async () => {
@@ -255,6 +361,36 @@ describe('PluginUserPersistenceService', () => {
       expect(result).toBeNull();
     });
 
+    it('preserves an existing empty string instead of reporting a missing entry', async () => {
+      store.overrideSelector(selectPluginUserDataFeatureState, [
+        { id: 'test-plugin:empty', data: '' },
+      ]);
+      expect(await service.loadPluginUserData('test-plugin:empty')).toBe('');
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a present entry with a malformed non-string payload', async () => {
+      for (const malformed of [undefined, null, 0, false]) {
+        store.overrideSelector(selectPluginUserDataFeatureState, [
+          { id: 'test-plugin:corrupt', data: malformed as unknown as string },
+        ]);
+        await expectAsync(
+          service.loadPluginUserData('test-plugin:corrupt'),
+        ).toBeRejectedWithError('Stored plugin data could not be decoded');
+      }
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects corrupt stored data instead of presenting an empty profile', async () => {
+      store.overrideSelector(selectPluginUserDataFeatureState, [
+        { id: 'test-plugin', data: SENTINEL + 'invalid-gzip' },
+      ]);
+      await expectAsync(service.loadPluginUserData('test-plugin')).toBeRejectedWithError(
+        'Stored plugin data could not be decoded',
+      );
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
     it('should return a pending coalesced write before it is committed', async () => {
       const baseTime = Date.now();
       jasmine.clock().install();
@@ -411,7 +547,7 @@ describe('PluginUserPersistenceService', () => {
       // resolves after the commit's await.
       const removePromise = service.removePluginUserData(pluginId);
 
-      await persistPromise;
+      await expectAsync(persistPromise).toBeRejectedWithError(/cancelled/);
       await removePromise;
       await drainAsync();
 

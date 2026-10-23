@@ -195,23 +195,25 @@ export const initializeProtocolHandling = (
   appInstance: App,
   getMainWindow: () => BrowserWindow | null,
 ): void => {
-  // Register protocol handler
-  if (IS_DEV && process.defaultApp) {
-    if (process.argv.length >= 2) {
-      const launchArgsForProtocol = [path.resolve(process.argv[1])];
-      const userDataDirArg = process.argv.find((arg) =>
-        arg.startsWith('--user-data-dir='),
-      );
-      if (userDataDirArg) {
-        launchArgsForProtocol.push(userDataDirArg);
-      }
+  // Portable and isolated launches may receive URLs without changing OS associations.
+  if (!process.argv.includes('--no-protocol-registration')) {
+    if (IS_DEV && process.defaultApp) {
+      if (process.argv.length >= 2) {
+        const launchArgsForProtocol = [path.resolve(process.argv[1])];
+        const userDataDirArg = process.argv.find((arg) =>
+          arg.startsWith('--user-data-dir='),
+        );
+        if (userDataDirArg) {
+          launchArgsForProtocol.push(userDataDirArg);
+        }
 
-      appInstance.setAsDefaultProtocolClient(PROTOCOL_NAME, process.execPath, [
-        ...launchArgsForProtocol,
-      ]);
+        appInstance.setAsDefaultProtocolClient(PROTOCOL_NAME, process.execPath, [
+          ...launchArgsForProtocol,
+        ]);
+      }
+    } else {
+      appInstance.setAsDefaultProtocolClient(PROTOCOL_NAME);
     }
-  } else {
-    appInstance.setAsDefaultProtocolClient(PROTOCOL_NAME);
   }
 
   // Handle protocol on Windows/Linux via second instance

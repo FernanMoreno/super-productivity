@@ -1,3 +1,8 @@
+import { PlannerOperationsService } from './personal-planner/planner-operations.service';
+import {
+  persistPluginDataSynced,
+  compareAndSwapPluginData,
+} from './plugin-persistence-api';
 import { computed, inject, Injectable, Injector, OnDestroy, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { MatDialog } from '@angular/material/dialog';
@@ -231,14 +236,20 @@ export class PluginBridgeService implements OnDestroy {
     this._initWindowFocusTracking();
   }
 
-  /**
-   * Create bound methods for a specific plugin
-   * This ensures each plugin has its own set of methods with the pluginId already bound
-   */
+  /** Create methods bound to the calling plugin identity. */
   createBoundMethods(
     pluginId: string,
     manifest?: PluginManifest,
   ): {
+    plannerOperation: (
+      action: string,
+      params: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
+    compareAndSwapSyncedData: (
+      expected: string | null,
+      dataStr: string,
+      key?: string,
+    ) => Promise<boolean>;
     persistDataSynced: (dataStr: string, key?: string) => Promise<void>;
     loadPersistedData: (key?: string) => Promise<string | null>;
     getConfig: () => Promise<unknown>;
@@ -297,7 +308,17 @@ export class PluginBridgeService implements OnDestroy {
     log: ReturnType<typeof Log.withContext>;
   } {
     return {
+      plannerOperation: (action, params) =>
+        this._injector.get(PlannerOperationsService).runPlugin(pluginId, action, params),
       // Data persistence
+      compareAndSwapSyncedData: (expected, dataStr, key) =>
+        compareAndSwapPluginData(
+          this._pluginUserPersistenceService,
+          pluginId,
+          expected,
+          dataStr,
+          key,
+        ),
       persistDataSynced: (dataStr: string, key?: string) =>
         this._persistDataSynced(pluginId, dataStr, key),
       loadPersistedData: (key?: string) => this._loadPersistedData(pluginId, key),
@@ -761,26 +782,13 @@ export class PluginBridgeService implements OnDestroy {
    * Get archived tasks
    */
   async getArchivedTasks(): Promise<TaskCopy[]> {
-    try {
-      const taskArchive = await this._taskArchiveService.load();
-
-      // Convert the archive format to TaskCopy array
-      const archivedTasks: TaskCopy[] = taskArchive.ids.map((id) => {
-        const task = taskArchive.entities[id];
-        if (!task) {
-          throw new Error(`Archived task with id ${id} not found in entities`);
-        }
-        return task as TaskCopy;
-      });
-
-      PluginLog.log('PluginBridge: Retrieved archived tasks', {
-        count: archivedTasks.length,
-      });
-      return archivedTasks;
-    } catch (error) {
-      PluginLog.err('PluginBridge: Failed to load archived tasks:', error);
-      return [];
-    }
+    const taskArchive = await this._taskArchiveService.load();
+    // A failed read must remain distinguishable from a genuinely empty archive.
+    return taskArchive.ids.map((id) => {
+      const task = taskArchive.entities[id];
+      if (!task) throw new Error('Archived task data is incomplete');
+      return task as TaskCopy;
+    });
   }
 
   /**
@@ -1361,40 +1369,20 @@ export class PluginBridgeService implements OnDestroy {
     return chunks;
   }
 
-  /**
-   * Internal method to persist plugin data.
-   * Includes size and rate limit validation; composeId enforces the
-   * `pluginId` keyspace contract at this transport boundary so the throw
-   * covers both iframe and direct API callers.
-   */
+  /** Validate the plugin keyspace and acknowledge only durable plugin data. */
   private async _persistDataSynced(
     pluginId: string,
     dataStr: string,
     key?: string,
   ): Promise<void> {
-    pluginAssert.string(dataStr);
-    assertPluginPersistenceKey(key);
-
-    try {
-      // Validates the pluginId synchronously; bubbles through the try/catch
-      // below as a normal Error.
-      const entityId = composeId(pluginId, key);
-      this._pluginUserPersistenceService.persistPluginUserData(entityId, dataStr);
-      PluginLog.log('PluginBridge: Plugin data persisted successfully', {
-        pluginId,
-        keyLen: key?.length ?? 0,
-        dataSize: new Blob([dataStr]).size,
-      });
-    } catch (error) {
-      // Log the specific error (rate limit, size, or composeId)
-      PluginLog.err('PluginBridge: Failed to persist plugin data:', error);
-
-      // Rethrow with the original error message for better debugging
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error(this._translateService.instant(T.PLUGINS.UNABLE_TO_PERSIST_DATA));
-    }
+    return persistPluginDataSynced(
+      this._injector,
+      this._pluginUserPersistenceService,
+      this._translateService,
+      pluginId,
+      dataStr,
+      key,
+    );
   }
 
   /**
@@ -1411,12 +1399,7 @@ export class PluginBridgeService implements OnDestroy {
   ): Promise<string | null> {
     assertPluginPersistenceKey(key);
     const entityId = composeId(pluginId, key);
-    try {
-      return await this._pluginUserPersistenceService.loadPluginUserData(entityId);
-    } catch (error) {
-      PluginLog.err('PluginBridge: Failed to get persisted plugin data:', error);
-      return null;
-    }
+    return this._pluginUserPersistenceService.loadPluginUserData(entityId);
   }
 
   /**
@@ -2333,9 +2316,7 @@ export class PluginBridgeService implements OnDestroy {
     return this.updateSimpleCounter(id, { countOnDay: newCountOnDay });
   }
 
-  /**
-   * Clean up all resources when service is destroyed
-   */
+  /** Clean up resources when the service is destroyed. */
   ngOnDestroy(): void {
     PluginLog.log('PluginBridgeService: Cleaning up resources');
     this._cleanupWindowFocusTracking();

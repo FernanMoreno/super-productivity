@@ -653,6 +653,7 @@ export interface PluginAPI {
   // tasks
   getTasks(): Promise<Task[]>;
 
+  /** Reads both archive tiers. Rejects when history cannot be loaded; [] means an empty archive. */
   getArchivedTasks(): Promise<Task[]>;
 
   getCurrentContextTasks(): Promise<Task[]>;
@@ -752,8 +753,25 @@ export interface PluginAPI {
   // plugin chooses (the host reserves ':' only as the pluginId/key
   // delimiter and only enforces that the pluginId itself is clean).
   // Empty-string keys are equivalent to omitting the argument.
+  /** Host planner prepare/apply/operation_status. Restricted to the enabled personal-planner plugin.
+   * Uses the same validation, native task services and durable receipts as MCP, without assistant credentials.
+   */
+  plannerOperation(
+    action: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  /** Local renderer CAS for cooperating writers; true only after durable storage.
+   * False means the raw value changed. Errors after dispatch may have uncertain outcome.
+   * This is not a distributed transaction across synced devices.
+   */
+  compareAndSwapSyncedData(
+    expected: string | null,
+    dataStr: string,
+    key?: string,
+  ): Promise<boolean>;
   persistDataSynced(dataStr: string, key?: string): Promise<void>;
 
+  /** Null means no entry. Read/decode failures reject rather than masquerading as absence. */
   loadSyncedData(key?: string): Promise<string | null>;
 
   getConfig<T = Record<string, unknown>>(): Promise<T | null>;

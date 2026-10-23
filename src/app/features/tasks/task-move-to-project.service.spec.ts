@@ -81,6 +81,25 @@ describe('TaskMoveToProjectService', () => {
     expect(repeatCfgService.updateTaskRepeatCfg).not.toHaveBeenCalled();
   });
 
+  it('rechecks a guarded series after loading members and before its first write', async () => {
+    const t = task({ repeatCfgId: 'cfg' });
+    repeatCfgService.getTaskRepeatCfgByIdAllowUndefined$.and.returnValue(
+      of({ id: 'cfg' } as TaskRepeatCfg),
+    );
+    taskService.getTasksWithSubTasksByRepeatCfgId$.and.returnValue(of([t]));
+    await expectAsync(
+      service.moveToProject(t, 'p2', {
+        isSkipConfirm: true,
+        beforeMove: async () => {
+          throw new Error('revoked');
+        },
+      }),
+    ).toBeRejectedWithError('revoked');
+    expect(repeatCfgService.updateTaskRepeatCfg).not.toHaveBeenCalled();
+    expect(taskService.moveToProject).not.toHaveBeenCalled();
+    expect(taskService.updateArchiveTasks).not.toHaveBeenCalled();
+  });
+
   it('updates the config directly for a single live instance', async () => {
     const t = task({ repeatCfgId: 'cfg' });
     repeatCfgService.getTaskRepeatCfgByIdAllowUndefined$.and.returnValue(

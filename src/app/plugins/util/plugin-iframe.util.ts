@@ -68,6 +68,8 @@ const ALLOWED_IFRAME_API_METHODS = new Set([
   'getActiveWorkContext',
   'getAppState',
   'persistDataSynced',
+  'compareAndSwapSyncedData',
+  'plannerOperation',
   'loadPersistedData',
   'registerHook',
   'registerWorkContextHeaderButton',
@@ -452,6 +454,8 @@ export const createPluginApiScript = (config: PluginIframeConfig): string => {
           getAppState: () => callApi('getAppState'),
 
           // Persistence methods (optional second arg = key, forwarded by callApi)
+          plannerOperation: (action, params) => callApi('plannerOperation', [action, params]),
+          compareAndSwapSyncedData: (expected, data, key) => callApi('compareAndSwapSyncedData', [expected, data, key]),
           persistDataSynced: (data, key) => callApi('persistDataSynced', [data, key]),
           loadPersistedData: (key) => callApi('loadPersistedData', [key]),
           loadSyncedData: (key) => callApi('loadPersistedData', [key]), // Alias

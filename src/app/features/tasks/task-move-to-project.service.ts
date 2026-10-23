@@ -36,12 +36,18 @@ export class TaskMoveToProjectService {
   async moveToProject(
     task: TaskWithSubTasks,
     projectId: string,
-    opts: { isSkipConfirm?: boolean } = {},
+    opts: {
+      isSkipConfirm?: boolean;
+      beforeMove?: (hasRepeatConfig: boolean) => Promise<void>;
+      atMove?: () => void;
+    } = {},
   ): Promise<boolean> {
     if (projectId === task.projectId || task.parentId) {
       return false;
     }
     if (!task.repeatCfgId) {
+      if (opts.beforeMove) await opts.beforeMove(false);
+      opts.atMove?.();
       this._taskService.moveToProject(task, projectId);
       return true;
     }
@@ -69,12 +75,16 @@ export class TaskMoveToProjectService {
     // still references it — treat it as a plain task move instead of
     // crashing on the missing config. (#8715)
     if (!repeatCfg) {
+      if (opts.beforeMove) await opts.beforeMove(false);
+      opts.atMove?.();
       this._taskService.moveToProject(task, projectId);
       return true;
     }
 
     // Only a single instance (probably just created): update the config directly.
     if (nonArchiveInstancesWithSubTasks.length === 1 && archiveInstances.length === 0) {
+      if (opts.beforeMove) await opts.beforeMove(true);
+      opts.atMove?.();
       this._taskRepeatCfgService.updateTaskRepeatCfg(repeatCfg.id, { projectId });
       this._taskService.moveToProject(task, projectId);
       return true;
@@ -100,6 +110,8 @@ export class TaskMoveToProjectService {
       return false;
     }
 
+    if (opts.beforeMove) await opts.beforeMove(true);
+    opts.atMove?.();
     this._taskRepeatCfgService.updateTaskRepeatCfg(repeatCfg.id, { projectId });
     nonArchiveInstancesWithSubTasks.forEach((instance) => {
       this._taskService.moveToProject(instance, projectId);

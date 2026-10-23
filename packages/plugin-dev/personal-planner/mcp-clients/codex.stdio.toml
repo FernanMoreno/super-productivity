@@ -1,0 +1,6 @@
+[mcp_servers.super_productivity]
+command = "node"
+args = ["/RUTA/super-productivity/tools/mcpb/server/index.js"]
+
+[mcp_servers.super_productivity.env]
+SP_ACCESS_KEY_FILE = "/RUTA_PRIVADA/super-productivity-mcp.token"

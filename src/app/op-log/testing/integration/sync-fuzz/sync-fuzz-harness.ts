@@ -107,6 +107,7 @@ import { BackupService } from '../../../backup/backup.service';
 import { OperationLogCompactionService } from '../../../persistence/operation-log-compaction.service';
 import { OperationLogHydratorService } from '../../../persistence/operation-log-hydrator.service';
 import { OperationLogStoreService } from '../../../persistence/operation-log-store.service';
+import { ArchiveStoreService } from '../../../persistence/archive-store.service';
 import { TabSeqFrontierService } from '../../../persistence/tab-seq-frontier.service';
 import { ImmediateUploadService } from '../../../sync/immediate-upload.service';
 import { OperationLogDownloadService } from '../../../sync/operation-log-download.service';
@@ -205,6 +206,8 @@ const DEVICE_FIELDS: ReadonlyArray<readonly [ProviderToken<object>, readonly str
         '_vectorClockCache',
       ],
     ],
+    // Proposal invalidation is renderer-local, including across simulated devices.
+    [ArchiveStoreService, ['_mutationVersion', '_mutationPending']],
     [TabSeqFrontierService, ['_frontier', '_hasForeignWrites']],
     [
       OperationLogDownloadService,

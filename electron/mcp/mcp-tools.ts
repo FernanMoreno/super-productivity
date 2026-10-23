@@ -1,3 +1,4 @@
+import { PLANNER_TOOLS } from './planner-tools';
 import {
   AssistantAccessScope,
   ASSISTANT_CAPTURE_PATH,
@@ -298,6 +299,7 @@ const CAPTURE_MESSAGES: Record<
 
 const createTask: ToolSpec = {
   scope: 'tasks:capture',
+  mutates: true,
   definition: {
     name: 'create_task',
     description:
@@ -417,10 +419,12 @@ const ALL_TOOLS: ToolSpec[] = [
   listProjects,
   listTags,
   createTask,
+  ...PLANNER_TOOLS,
 ];
 
 const isGranted = (tool: ToolSpec, scopes: readonly AssistantAccessScope[]): boolean =>
-  tool.scope === undefined || scopes.includes(tool.scope);
+  (tool.scope === undefined || scopes.includes(tool.scope)) &&
+  (tool.requiredScopes ?? []).every((scope) => scopes.includes(scope));
 
 export const listGrantedTools = (
   scopes: readonly AssistantAccessScope[],
@@ -454,7 +458,7 @@ export const runTool = async (
   // A grant revoked (or access switched off) while the renderer was answering
   // must not still hand out the data. A capture that already ran is reported
   // as such, since withholding it would invite a duplicate.
-  if (tool.scope !== 'tasks:capture' && !isGranted(tool, getScopes())) {
+  if (!tool.mutates && !isGranted(tool, getScopes())) {
     return fail('NOT_PERMITTED', 'This connection may not use this tool.');
   }
   return result;

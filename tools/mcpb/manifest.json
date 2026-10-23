@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "super-productivity",
   "display_name": "Super Productivity",
-  "version": "1.0.0",
-  "description": "Lets Claude read your Super Productivity tasks or add tasks to your Inbox, limited to the permissions you grant in the app.",
-  "long_description": "Connects Claude Desktop to the Super Productivity desktop app running on this computer (Settings → Misc → Enable assistant access). The app decides what Claude may do: read task summaries, also read notes, and/or add tasks to the Inbox. This extension only relays messages to http://127.0.0.1:3876/mcp; it stores no data. Super Productivity must be running.",
+  "version": "1.1.0",
+  "description": "Conecta Claude Desktop con las tareas, el registro de tiempo y Mi planificación de Super Productivity, según los permisos concedidos.",
+  "long_description": "Adaptador local stdio a HTTP para el endpoint MCP de la aplicación Electron abierta, http://127.0.0.1:3876/mcp. Las herramientas disponibles dependen de la versión instalada y los permisos concedidos en la aplicación. No añade backend ni almacena tareas o perfiles. La aplicación debe seguir ejecutándose; puede estar minimizada.",
   "author": {
     "name": "Super Productivity",
     "url": "https://super-productivity.com"
@@ -18,17 +18,26 @@
       "command": "node",
       "args": ["${__dirname}/server/index.js"],
       "env": {
-        "SP_ACCESS_KEY": "${user_config.access_key}"
+        "SP_ACCESS_KEY": "${user_config.access_key}",
+        "SP_ACCESS_KEY_FILE": "${user_config.access_key_file}"
       }
     }
   },
   "user_config": {
     "access_key": {
       "type": "string",
-      "title": "Access key",
-      "description": "Generate it in Super Productivity: Settings → Misc → Assistant access → Generate access key.",
+      "title": "Clave de acceso MCP",
+      "description": "Clave independiente de REST, generada en Ajustes de Super Productivity: acceso del asistente. Puede dejarse vacía si se utiliza un archivo externo.",
       "sensitive": true,
-      "required": true
+      "required": false,
+      "default": ""
+    },
+    "access_key_file": {
+      "type": "file",
+      "title": "Archivo externo de clave MCP",
+      "description": "Archivo privado fuera del repositorio, que contiene únicamente la clave sp_mcp_. Tiene prioridad sobre el campo de clave.",
+      "required": false,
+      "default": ""
     }
   },
   "compatibility": {
@@ -36,5 +45,6 @@
     "runtimes": {
       "node": ">=18.0.0"
     }
-  }
+  },
+  "tools_generated": true
 }

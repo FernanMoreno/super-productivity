@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 // Active tests for setCounter fix (issue #5812)
+import { OperationWriteFlushService } from '../op-log/sync/operation-write-flush.service';
+import { OperationCaptureService } from '../op-log/capture/operation-capture.service';
 import { TestBed } from '@angular/core/testing';
 import { MockStore, provideMockStore } from '@ngrx/store/testing';
 import { selectTaskByIdWithSubTaskData } from '../features/tasks/store/task.selectors';
@@ -96,7 +98,20 @@ describe('PluginBridgeService - Counter Methods', () => {
         { provide: WorkContextService, useValue: { activeWorkContext$: of(null) } },
         { provide: ProjectService, useValue: {} },
         { provide: TagService, useValue: {} },
-        { provide: PluginUserPersistenceService, useValue: {} },
+        {
+          provide: PluginUserPersistenceService,
+          useValue: { persistPluginUserData: jasmine.createSpy().and.resolveTo() },
+        },
+        {
+          provide: OperationWriteFlushService,
+          useValue: { flushPendingWrites: jasmine.createSpy().and.resolveTo() },
+        },
+        {
+          provide: OperationCaptureService,
+          useValue: {
+            hasUnrecoveredPersistFailure: jasmine.createSpy().and.returnValue(false),
+          },
+        },
         { provide: PluginConfigService, useValue: {} },
         { provide: TaskArchiveService, useValue: {} },
         { provide: Router, useValue: {} },
@@ -141,6 +156,84 @@ describe('PluginBridgeService - Counter Methods', () => {
 
   afterEach(() => {
     store?.resetSelectors();
+  });
+
+  describe('durable plugin persistence', () => {
+    it('propagates a persistence read failure instead of returning absence', async () => {
+      const persistence = TestBed.inject(PluginUserPersistenceService);
+      persistence.loadPluginUserData = jasmine
+        .createSpy()
+        .and.rejectWith(new Error('Read unavailable'));
+      await expectAsync(
+        service['_loadPersistedData']('test-plugin'),
+      ).toBeRejectedWithError('Read unavailable');
+    });
+
+    it('propagates an archive read failure instead of returning zero historic tasks', async () => {
+      const archive = TestBed.inject(TaskArchiveService);
+      archive.load = jasmine.createSpy().and.rejectWith(new Error('Archive unavailable'));
+      await expectAsync(service.getArchivedTasks()).toBeRejectedWithError(
+        'Archive unavailable',
+      );
+    });
+
+    it('waits for the coalesced commit and durable flush before acknowledging', async () => {
+      let commit!: () => void;
+      let flush!: () => void;
+      const persistence = TestBed.inject(PluginUserPersistenceService);
+      const writes = TestBed.inject(OperationWriteFlushService);
+      (persistence.persistPluginUserData as jasmine.Spy).and.returnValue(
+        new Promise<void>((resolve) => {
+          commit = resolve;
+        }),
+      );
+      (writes.flushPendingWrites as jasmine.Spy).and.returnValue(
+        new Promise<void>((resolve) => {
+          flush = resolve;
+        }),
+      );
+      let acknowledged = false;
+      const result = service['_persistDataSynced']('test-plugin', 'data').then(() => {
+        acknowledged = true;
+      });
+      await Promise.resolve();
+      expect(acknowledged).toBeFalse();
+      expect(writes.flushPendingWrites).not.toHaveBeenCalled();
+      commit();
+      await Promise.resolve();
+      expect(writes.flushPendingWrites).toHaveBeenCalledTimes(1);
+      expect(acknowledged).toBeFalse();
+      flush();
+      await result;
+      expect(acknowledged).toBeTrue();
+    });
+
+    it('rejects when the durable write failed instead of confirming a save', async () => {
+      const capture = TestBed.inject(OperationCaptureService);
+      (capture.hasUnrecoveredPersistFailure as jasmine.Spy).and.returnValue(true);
+      await expectAsync(
+        service['_persistDataSynced']('test-plugin', 'data'),
+      ).toBeRejectedWithError(/durable/);
+    });
+
+    it('propagates commit and flush errors', async () => {
+      const persistence = TestBed.inject(PluginUserPersistenceService);
+      const writes = TestBed.inject(OperationWriteFlushService);
+      (persistence.persistPluginUserData as jasmine.Spy).and.rejectWith(
+        new Error('commit failed'),
+      );
+      await expectAsync(
+        service['_persistDataSynced']('test-plugin', 'data'),
+      ).toBeRejectedWithError('commit failed');
+      expect(writes.flushPendingWrites).not.toHaveBeenCalled();
+      (persistence.persistPluginUserData as jasmine.Spy).and.resolveTo();
+      (writes.flushPendingWrites as jasmine.Spy).and.rejectWith(
+        new Error('flush failed'),
+      );
+      await expectAsync(
+        service['_persistDataSynced']('test-plugin', 'data'),
+      ).toBeRejectedWithError('flush failed');
+    });
   });
 
   describe('setCounter', () => {

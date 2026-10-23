@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1"
+    />
+    <title>Mi planificación</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        color: var(--text-color);
+        background: var(--bg);
+        margin: 0;
+        padding: var(--s2, 16px);
+        line-height: 1.5;
+      }
+      main {
+        max-width: 1180px;
+        margin: auto;
+      }
+      h1,
+      h2,
+      h3 {
+        line-height: 1.2;
+      }
+      nav,
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--s, 8px);
+      }
+      nav {
+        margin-bottom: var(--s2, 16px);
+      }
+      a {
+        color: var(--c-primary);
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+        padding: var(--s, 8px);
+      }
+      input,
+      select,
+      textarea {
+        background: var(--card-bg);
+        border: 1px solid var(--divider-color);
+        border-radius: var(--s-half, 4px);
+        padding: var(--s, 8px);
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      input[type='checkbox'] {
+        width: auto;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible,
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid var(--c-primary);
+        outline-offset: 3px;
+      }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+      section,
+      article,
+      fieldset,
+      details {
+        margin: var(--s2, 16px) 0;
+      }
+      article,
+      fieldset {
+        background: var(--card-bg);
+        border: 1px solid var(--divider-color);
+        border-radius: var(--s, 8px);
+        padding: var(--s2, 16px);
+        min-width: 0;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+        gap: var(--s2, 16px);
+      }
+      label {
+        display: block;
+        margin: var(--s, 8px) 0;
+      }
+      label > input:not([type='checkbox']),
+      label > select,
+      label > textarea {
+        display: block;
+        width: 100%;
+      }
+      select[multiple] {
+        min-height: 100px;
+      }
+      summary {
+        cursor: pointer;
+      }
+      .notice {
+        border-left: 4px solid var(--c-primary);
+        padding: var(--s, 8px) var(--s2, 16px);
+        background: var(--card-bg);
+      }
+      .error {
+        border-color: var(--color-danger);
+      }
+      .warning {
+        border-color: var(--color-warning);
+      }
+      .muted {
+        font-size: 0.9em;
+      }
+      .scroll {
+        overflow: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid var(--divider-color);
+        padding: var(--s, 8px);
+      }
+      progress {
+        width: 100%;
+        accent-color: var(--c-primary);
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .skip {
+        position: absolute;
+        top: -100px;
+      }
+      .skip:focus {
+        top: 0;
+        background: var(--card-bg);
+      }
+      li {
+        margin-bottom: var(--s, 8px);
+      }
+      @media (max-width: 500px) {
+        body {
+          padding: var(--s, 8px);
+        }
+        th,
+        td {
+          padding: var(--s-half, 4px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a
+      class="skip"
+      href="#today"
+      >Ir a Hoy</a
+    >
+    <main>
+      <h1>Mi planificación</h1>
+      <p id="context">Configuración y datos de Super Productivity</p>
+      <nav aria-label="Apartados">
+        <a href="#today">Hoy</a><a href="#goals">Objetivos y progreso</a
+        ><a href="#week">Disponibilidad semanal</a><a href="#settings">Configuración</a>
+      </nav>
+      <div class="row">
+        <button
+          id="refresh"
+          type="button"
+        >
+          Actualizar datos</button
+        ><label
+          >Fecha de consulta
+          <input
+            id="day"
+            type="date"
+        /></label>
+      </div>
+      <p
+        id="status"
+        role="status"
+        aria-live="polite"
+      >
+        Cargando datos…
+      </p>
+      <div
+        id="error"
+        class="notice error"
+        role="alert"
+        hidden
+      ></div>
+      <div id="warnings"></div>
+      <section
+        id="today"
+        tabindex="-1"
+      >
+        <h2>Hoy</h2>
+        <div id="today-content"></div>
+      </section>
+      <section id="goals">
+        <h2>Objetivos y progreso</h2>
+        <div id="goals-content"></div>
+      </section>
+      <section id="week">
+        <h2>Disponibilidad semanal</h2>
+        <div id="week-content"></div>
+        <h3>Reorganización revisable</h3>
+        <p>
+          Prepara alternativas para las tareas nativas y las actividades de esta semana.
+          Preparar no modifica el calendario.
+        </p>
+        <button
+          type="button"
+          data-action="prepare-shared"
+          data-id=""
+        >
+          Preparar propuesta de la semana
+        </button>
+        <div
+          id="proposal-review"
+          aria-live="polite"
+        ></div>
+      </section>
+      <section id="settings">
+        <h2>Configuración</h2>
+        <div id="settings-content"></div>
+        <details>
+          <summary>Consultar una operación tras perder conexión</summary>
+          <form data-form="operation-status">
+            <label
+              >Tipo de operación<select name="action">
+                <option value="edit">Configuración</option>
+                <option value="task">Tarea</option>
+                <option value="log_time">Registro de tiempo</option>
+                <option value="apply">Aplicar propuesta</option>
+              </select></label
+            >
+            <label
+              >Identificador de operación<input
+                name="operationId"
+                required
+                pattern="[A-Za-z0-9_-]{8,80}"
+                maxlength="80"
+            /></label>
+            <button>Consultar recibo sin repetir cambios</button>
+            <p
+              id="operation-result"
+              role="status"
+            ></p>
+          </form>
+        </details>
+      </section>
+    </main>
+    <!-- BUILD:SCRIPT -->
+  </body>
+</html>
