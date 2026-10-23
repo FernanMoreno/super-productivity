@@ -8,7 +8,9 @@ La aplicación debe permanecer abierta; puede estar minimizada. El frontend web 
 
 El número `19.2.0` por sí solo no demuestra compatibilidad: la publicación original del 11 de octubre de 2026 no contiene el MCP nativo. La base de desarrollo `78139c5`, del 20 de octubre de 2026, sí contiene el transporte MCP. Las herramientas de planificación requieren además los cambios de esta adaptación. Conserva el commit de la compilación instalada junto con el resultado de sus pruebas.
 
-Los ejemplos se revisaron con Codex CLI **0.163.0**, OpenCode **2.0.18**, Claude Code **2.1.303** y Node **24.19.0**. La lectura de ayuda de un cliente no equivale a una conexión con Electron. El servidor negocia actualmente el protocolo MCP clásico; no fuerces la revisión 2026-07-28 en el cliente.
+Las versiones disponibles, comprobadas mediante órdenes administrativas locales, son Codex CLI **0.163.0**, OpenCode **2.0.18**, Claude Code **2.1.303** y Node **24.19.0**. Claude Desktop Windows instalado: **1.20186.1.0**, según la comprobación aislada de 0.4.0. La lectura de ayuda de un cliente no equivale a una conexión con Electron. El servidor negocia actualmente el protocolo MCP clásico; no fuerces la revisión 2026-07-28 en el cliente.
+
+La ampliación 0.5 de las herramientas requiere actualizar **aplicación y plugin**; después vuelve a conectar el cliente para renovar `tools/list`. Los archivos HTTP/stdio y el adaptador siguen siendo comunes. [El contrato MCP](planner-mcp.md) distingue lectura, modificación concreta y aplicación de una propuesta revisada. La validación de transporte realizada para 0.4.0 no acredita por sí sola las operaciones añadidas en 0.5.
 
 ## Habilitar acceso y preparar la clave
 
@@ -33,6 +35,8 @@ La adaptación añade `planner:read`, `planner:write`, `tasks:read_history`, `ta
 - `planner_prepare`: preparar propuestas revisables sin aplicar cambios.
 - `planner_apply`: aplicar la selección explícita de una preparación todavía vigente.
 - `planner_operation_status`: consultar el recibo durable de una operación sin repetirla; requiere los permisos de su acción original.
+
+En 0.5 se añaden `planner_next`, `planner_review`, `planner_review_advance`, `planner_correct_time`, `planner_proposal_adjust`, `planner_reorganizations` y `planner_prepare_undo`. Las consultas no inician temporizadores ni aplican cambios. Avanzar una revisión requiere escritura del planificador; corregir tiempo requiere `time:write`; aplicar una inversa de tareas nativas exige además `tasks:write`. El detalle de parámetros, efectos y errores está en [herramientas y permisos](planner-mcp.md#herramientas-y-permisos).
 
 No se debe suponer que todas estarán disponibles con una clave de solo lectura. Los errores de datos incompletos, archivo inaccesible o revisión obsoleta deben conservarse visibles. Los parámetros concretos se consultan en los esquemas descubiertos; los ejemplos de cliente no duplican esos contratos.
 
@@ -88,7 +92,15 @@ Instala `dist/super-productivity.mcpb` en Desktop. El manifiesto ofrece archivo 
 
 El adaptador usa un plazo total de 60 segundos, superior al presupuesto de captura nativo de 45 segundos. Las llamadas a herramientas con respuesta perdida se consideran inciertas aunque fueran de lectura; es una clasificación conservadora para no duplicar modificaciones. No añade `Origin`, sigue únicamente la URL local configurada y no sigue redirecciones.
 
+## Recuperar una operación sin repetirla
+
+Si se cierra la aplicación, se interrumpe la conexión. El cliente o el puente no debe convertir un timeout en una confirmación de fallo. Abre de nuevo Electron y consulta `planner_operation_status` con el `operationId` conservado y la acción original: `edit`, `task`, `log_time`, `apply`, `review_advance` o `correct_time`. Esta consulta no reejecuta la acción.
+
+Un recibo `pending`, `uncertain` o ausente no autoriza a repetir con otro ID. Consulta los datos actuales y conserva la incertidumbre. Una propuesta que caducó o desapareció tras reiniciar debe prepararse y revisarse de nuevo; no se sustituye automáticamente por otra. La revisión y el historial persistidos permiten retomar el trabajo, pero no convierten una aplicación incierta en confirmada.
+
 ## Qué se ha comprobado
+
+Los resultados de aplicación y clientes recogidos en [VALIDACION-LIMITES.md](../packages/plugin-dev/personal-planner/VALIDACION-LIMITES.md) corresponden a **0.4.0**. Para 0.5 están comprobados los contratos MCP por 32 pruebas Node con forwarding simulado; la ejecución final de Electron, interfaz y clientes debe identificarse por separado en su informe. No se atribuye todavía una validación integral a las herramientas nuevas.
 
 Ejecuta las pruebas desde la raíz del checkout:
 

@@ -31,6 +31,121 @@ const trelloCard = {
 };
 
 describe('Trello issue provider write operations', () => {
+  const move = {
+    idList: 'next-list',
+    expectedListId: 'list-id',
+    expectedBoardId: 'board-id',
+  };
+  const movementHttp = (card = {}, list = {}) => ({
+    get: vi
+      .fn()
+      .mockResolvedValueOnce({ ...trelloCard, ...card })
+      .mockResolvedValueOnce({
+        id: 'next-list',
+        idBoard: 'board-id',
+        closed: false,
+        ...list,
+      }),
+    put: vi.fn().mockResolvedValue(undefined),
+  });
+
+  it('exposes current board and list without changing card identity', async () => {
+    const get = vi.fn().mockResolvedValue(trelloCard);
+    const issue = await definition.getById('abc123', {}, {
+      get,
+    } as unknown as PluginHttp);
+    expect(issue).toMatchObject({ id: 'abc123', idBoard: 'board-id', idList: 'list-id' });
+  });
+
+  it('revalidates the card and destination before moving only its list', async () => {
+    const http = movementHttp();
+    await definition.updateIssue!('abc123', move, {}, http as unknown as PluginHttp);
+    expect(http.get.mock.calls).toEqual([
+      [
+        'https://api.trello.com/1/cards/abc123',
+        { params: { fields: 'idBoard,idList,closed' } },
+      ],
+      [
+        'https://api.trello.com/1/lists/next-list',
+        { params: { fields: 'idBoard,closed' } },
+      ],
+    ]);
+    expect(http.put).toHaveBeenCalledExactlyOnceWith(
+      'https://api.trello.com/1/cards/abc123',
+      { idList: 'next-list' },
+    );
+    expect(http.get.mock.invocationCallOrder[1]).toBeLessThan(
+      http.put.mock.invocationCallOrder[0],
+    );
+  });
+
+  it.each([
+    [{ idBoard: 'other-board' }, {}],
+    [{ idList: 'other-list' }, {}],
+    [{ closed: true }, {}],
+    [{ closed: undefined }, {}],
+    [{}, { closed: true }],
+    [{}, { closed: undefined }],
+    [{}, { idBoard: 'other-board' }],
+  ])('rejects stale or archived card/list state %j %j', async (card, list) => {
+    const http = movementHttp(card, list);
+    await expect(
+      definition.updateIssue!('abc123', move, {}, http as unknown as PluginHttp),
+    ).rejects.toThrow();
+    expect(http.put).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { idList: 'next-list' },
+    { ...move, expectedListId: undefined },
+    { ...move, expectedBoardId: undefined },
+    { ...move, state: 'closed' },
+    { ...move, title: 'Changed' },
+    { ...move, idList: '' },
+    { ...move, idList: 'a/b' },
+    { ...move, idList: 'a?b' },
+    { ...move, idList: 'x'.repeat(129) },
+    { ...move, expectedListId: 'a%2Fb' },
+    { ...move, expectedBoardId: 123 },
+    { expectedListId: 'list-id', expectedBoardId: 'board-id' },
+  ])('rejects malformed or mixed movement before HTTP: %j', async (changes) => {
+    const http = movementHttp();
+    await expect(
+      definition.updateIssue!('abc123', changes, {}, http as unknown as PluginHttp),
+    ).rejects.toThrow();
+    expect(http.get).not.toHaveBeenCalled();
+    expect(http.put).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'abc/def', 'abc?def', 'abc#def', 'x'.repeat(129)])(
+    'rejects malformed moving card id %j before HTTP',
+    async (id) => {
+      const http = movementHttp();
+      await expect(
+        definition.updateIssue!(id, move, {}, http as unknown as PluginHttp),
+      ).rejects.toThrow();
+      expect(http.get).not.toHaveBeenCalled();
+      expect(http.put).not.toHaveBeenCalled();
+    },
+  );
+
+  it('accepts URL-safe identifiers without changing request segments', async () => {
+    const http = movementHttp();
+    await definition.updateIssue!('abc_123-X', move, {}, http as unknown as PluginHttp);
+    expect(http.put).toHaveBeenCalledWith('https://api.trello.com/1/cards/abc_123-X', {
+      idList: 'next-list',
+    });
+  });
+
+  it('does not write if remote validation fails', async () => {
+    const http = movementHttp();
+    http.get.mockReset().mockRejectedValue(new Error('Forbidden'));
+    await expect(
+      definition.updateIssue!('abc123', move, {}, http as unknown as PluginHttp),
+    ).rejects.toThrow('Forbidden');
+    expect(http.put).not.toHaveBeenCalled();
+  });
+
   it('updates card status and title', async () => {
     const put = vi.fn().mockResolvedValue(undefined);
     const http = { put } as unknown as PluginHttp;

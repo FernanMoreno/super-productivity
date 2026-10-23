@@ -52,7 +52,7 @@ export interface PlannerPorts {
 }
 export interface PlannerOperations {
   operationStatus(args: {
-    action: 'edit' | 'task' | 'log_time' | 'apply';
+    action: 'edit' | 'task' | 'log_time' | 'apply' | 'review_advance' | 'correct_time';
     operationId: string;
   }): Promise<Record<string, unknown>>;
   activities(): Promise<{ profile: PlannerProfile; revision: string }>;
@@ -62,6 +62,23 @@ export interface PlannerOperations {
   query(args: { from: string; to: string }): Promise<Record<string, unknown>>;
   prepare(args: { from: string; to: string }): Promise<Record<string, unknown>>;
   apply(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  adjustProposal(args: {
+    proposalId: string;
+    changes: Array<{ itemId: string; start: number; end?: number }>;
+  }): Promise<Record<string, unknown>>;
+  history(args?: {
+    historyId?: string;
+    limit?: number;
+  }): Promise<Record<string, unknown>>;
+  prepareUndo(args: {
+    historyId: string;
+    selection?: string[];
+  }): Promise<Record<string, unknown>>;
+  next(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  review(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  reviewAdvance(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  correctTime(args: Record<string, unknown>): Promise<Record<string, unknown>>;
+  captureBaseline(args: { from: string; to: string }): Promise<Record<string, unknown>>;
   contextRevision(): Promise<string>;
 }
 export class PlannerError extends Error {

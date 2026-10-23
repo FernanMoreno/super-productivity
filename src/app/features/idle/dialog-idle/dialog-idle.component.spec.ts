@@ -6,7 +6,8 @@ import { provideNoopAnimations } from '@angular/platform-browser/animations';
 import { of } from 'rxjs';
 import { DialogIdleComponent } from './dialog-idle.component';
 import { DialogIdlePassedData } from './dialog-idle.model';
-import { selectIdleTime } from '../store/idle.selectors';
+import { selectIdleState, selectIdleTime } from '../store/idle.selectors';
+import { initialIdleState } from '../store/idle.reducer';
 import { TaskService } from '../../tasks/task.service';
 import { GlobalConfigService } from '../../config/global-config.service';
 import { Task } from '../../tasks/task.model';
@@ -66,6 +67,7 @@ describe('DialogIdleComponent', () => {
       ],
     });
     const store = TestBed.inject(MockStore);
+    store.overrideSelector(selectIdleState, initialIdleState);
     store.overrideSelector(selectIdleTime, idleTime);
     store.overrideSelector(selectAllProjects, []);
     store.overrideSelector(selectTrackableTasksActiveContextFirst, []);
@@ -75,6 +77,33 @@ describe('DialogIdleComponent', () => {
     fixture.detectChanges();
     return fixture.componentInstance;
   };
+
+  describe('return to activity', () => {
+    it('freezes on genuine input while preserving the task selection and open dialog', () => {
+      const c = setup({ lastCurrentTaskId: 'LAST_TASK_ID' });
+      const dispatch = spyOn(TestBed.inject(MockStore), 'dispatch');
+      (c as unknown as { onUserActivity: (event: Event) => void }).onUserActivity({
+        isTrusted: true,
+      } as Event);
+      expect(dispatch).toHaveBeenCalledWith({
+        type: '[Idle] Freeze idle time',
+        idleTime: IDLE_TIME,
+      });
+      expect(c.mode).toBe('TASK');
+      expect(c.selectedTask).toEqual(FAKE_TASK);
+      expect(dialogRefSpy.close).not.toHaveBeenCalled();
+    });
+
+    it('ignores synthetic events unrelated to physical user input', () => {
+      const c = setup();
+      const dispatch = spyOn(TestBed.inject(MockStore), 'dispatch');
+      (c as unknown as { onUserActivity: (event: Event) => void }).onUserActivity(
+        new Event('pointermove'),
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(dialogRefSpy.close).not.toHaveBeenCalled();
+    });
+  });
 
   describe('initial state', () => {
     it('should start without a mode and with confirm disabled when there is no last task', () => {

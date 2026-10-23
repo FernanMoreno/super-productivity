@@ -1,4 +1,10 @@
-import { Routes } from '@angular/router';
+import { WorkspaceDraftService } from './pages/workspace-draft.service';
+import { inject } from '@angular/core';
+import { Routes, UrlSegment } from '@angular/router';
+import {
+  isWorkspaceNavigation,
+  workspaceDestination,
+} from './pages/workspace-navigation';
 
 import {
   ActiveWorkContextGuard,
@@ -28,6 +34,41 @@ export const APP_ROUTES: Routes = [
     canActivateChild: [FocusOverlayOpenGuard],
     loadChildren: () => import('./routes/context.routes').then((m) => m.TAG_CHILD_ROUTES),
   },
+  {
+    matcher: (segments) => {
+      const target = workspaceDestination(segments.map((segment) => segment.path));
+      if (!target) {
+        return null;
+      }
+      return {
+        consumed: segments,
+        posParams: Object.fromEntries(
+          Object.entries(target).map(([key, value]) => [key, new UrlSegment(value, {})]),
+        ),
+      };
+    },
+    loadComponent: () =>
+      import('./pages/workspace-page.component').then((m) => m.WorkspacePageComponent),
+    data: { page: 'workspace' },
+    canActivate: [
+      (route) =>
+        inject(WorkspaceDraftService).canNavigate({
+          section: route.params['section'],
+          projectId: route.params['id'] || route.queryParams['projectId'],
+          taskId: route.queryParams['taskId'],
+        }),
+      (route, state) =>
+        route.params['id'] ? inject(ValidProjectIdGuard).canActivate(route, state) : true,
+      FocusOverlayOpenGuard,
+    ],
+    canDeactivate: [
+      (_component, _route, _state, nextState) =>
+        !!nextState && isWorkspaceNavigation(nextState.url)
+          ? true
+          : inject(WorkspaceDraftService).canLeave(),
+    ],
+    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
+  },
   // Project routes (tasks, worklog, history, summary, metrics)
   // Shares one chunk with tag routes via context.routes.ts
   {
@@ -36,6 +77,13 @@ export const APP_ROUTES: Routes = [
     canActivateChild: [FocusOverlayOpenGuard],
     loadChildren: () =>
       import('./routes/context.routes').then((m) => m.PROJECT_CHILD_ROUTES),
+  },
+  {
+    path: 'reports',
+    loadComponent: () =>
+      import('./features/history/history.component').then((m) => m.HistoryComponent),
+    data: { page: 'history' },
+    canActivate: [FocusOverlayOpenGuard],
   },
   // Standalone pages — all import from same barrel so they share one chunk
   {

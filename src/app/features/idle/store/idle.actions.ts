@@ -22,6 +22,11 @@ export const setIdleTime = createAction(
   props<{ idleTime: number }>(),
 );
 
+export const freezeIdleTime = createAction(
+  '[Idle] Freeze idle time',
+  props<{ idleTime: number }>(),
+);
+
 export const idleDialogResult = createAction(
   '[Idle] Dialog result',
   props<{

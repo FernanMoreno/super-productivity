@@ -214,6 +214,29 @@
             <h2 class="mat-h2 section-title">
               {{ 'PS.TABS.PLUGINS' | translate }}
             </h2>
+            @if (isElectron) {
+              <section class="config-section integrations-access-section">
+                <h3>{{ 'AW.INTEGRATIONS_ACCESS' | translate }}</h3>
+                <formly-form [fields]="accessFields"></formly-form>
+              </section>
+            }
+            @if (
+              plannerPluginService.pluginStates().get('personal-planner')?.status ===
+              'loaded'
+            ) {
+              <section class="config-section planner-connections-section">
+                <a
+                  mat-button
+                  routerLink="/settings/integrations"
+                  >{{ 'AW.CONNECTIONS' | translate }}</a
+                >
+                <a
+                  mat-button
+                  routerLink="/settings/planner"
+                  >{{ 'AW.PREFERENCES' | translate }}</a
+                >
+              </section>
+            }
             <section class="config-section plugin-section">
               <plugin-management></plugin-management>
             </section>

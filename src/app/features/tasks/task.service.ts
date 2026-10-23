@@ -91,7 +91,7 @@ import {
   syncTimeTracking,
 } from '../time-tracking/store/time-tracking.actions';
 import { selectTimeTrackingState } from '../time-tracking/store/time-tracking.selectors';
-import { ArchiveService } from '../archive/archive.service';
+import { ArchiveService, ArchiveMoveGuards } from '../archive/archive.service';
 import { TaskArchiveService } from '../archive/task-archive.service';
 import { TODAY_TAG } from '../tag/tag.const';
 import { TaskSharedActions } from '../../root-store/meta/task-shared.actions';
@@ -888,20 +888,20 @@ export class TaskService {
     this._store.dispatch(TimeTrackingActions.addTimeSpent(props));
   }
 
-  /**
-   * Adds time spent to a task AND dispatches the persistent syncTimeSpent action.
-   * Use this instead of addTimeSpent when the caller is NOT using BatchedTimeSyncAccumulator
-   * (e.g. idle dialog, tracking reminder). The tick path uses the accumulator instead.
-   * A `date` other than today is back-filled (see `isBackfill` on `addTimeSpent`).
-   */
-  addTimeSpentAndSync(task: Task, duration: number, date?: string): void {
+  /** Adds and syncs time; backfill omits session bounds when the interval is unknown. */
+  addTimeSpentAndSync(
+    task: Task,
+    duration: number,
+    date?: string,
+    isBackfill = false,
+  ): void {
     if (duration <= 0) {
       return;
     }
     this._taskTimeSync.flushOne(task.id);
     const today = this._dateService.todayStr();
     const day = date ?? today;
-    this.addTimeSpent(task, duration, day, false, day !== today);
+    this.addTimeSpent(task, duration, day, false, isBackfill || day !== today);
     this._store.dispatch(syncTimeSpent({ taskId: task.id, date: day, duration }));
   }
 
@@ -943,7 +943,10 @@ export class TaskService {
     }
   }
 
-  async moveToArchive(tasks: TaskWithSubTasks | TaskWithSubTasks[]): Promise<void> {
+  async moveToArchive(
+    tasks: TaskWithSubTasks | TaskWithSubTasks[],
+    guards?: ArchiveMoveGuards,
+  ): Promise<void> {
     if (!tasks) {
       TaskLog.err('[TaskService] moveToArchive called with null/undefined tasks');
       return;
@@ -1018,17 +1021,14 @@ export class TaskService {
     }
 
     if (parentTasksToArchive.length) {
-      // Only move parent tasks to archive, never subtasks
-      // Note: Full task payload required for sync - see docs/sync-and-op-log/operation-log-architecture.md
-      // Persist first: dispatch removes the tasks from NgRx and makes the captured
-      // operation eligible for a full-state snapshot. If archive persistence were
-      // still in flight, that snapshot could acknowledge the operation while
-      // omitting its archived task data.
+      // Persist before removing live tasks: snapshots must include their archive data.
       const archivePromise = (async (): Promise<void> => {
         TaskLog.log('[TaskService] Calling archive service to persist tasks');
         await this._archiveService.moveTasksToArchiveAndFlushArchiveIfDue(
           parentTasksToArchive,
+          ...(guards ? ([guards] as const) : ([] as const)),
         );
+        guards?.beforeRemove?.();
         TaskLog.log('[TaskService] Dispatching moveToArchive action for parent tasks');
         this._store.dispatch(
           TaskSharedActions.moveToArchive({ tasks: parentTasksToArchive }),

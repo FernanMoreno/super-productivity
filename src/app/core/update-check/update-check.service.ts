@@ -25,6 +25,13 @@ const REQUEST_TIMEOUT = 15 * 1000;
 // open, so anything that isn't exactly a version tag is treated as malformed.
 const RELEASE_TAG_REGEX = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
+export interface UpdateCheckOutcome {
+  status: 'available' | 'up_to_date' | 'busy' | 'error';
+  currentVersion: string;
+  latestVersion?: string;
+  releaseUrl?: string;
+}
+
 /**
  * Desktop-only "new version available" check (#5463). Fetches the latest
  * published GitHub release and shows a once-per-version banner linking to the
@@ -63,8 +70,16 @@ export class UpdateCheckService {
   }
 
   async checkForUpdate({ isUserTriggered = false } = {}): Promise<void> {
+    await this.checkForUpdateOutcome({ isUserTriggered });
+  }
+
+  async checkForUpdateOutcome({
+    isUserTriggered = false,
+    isSilent = false,
+  } = {}): Promise<UpdateCheckOutcome> {
+    const currentVersion = environment.version;
     if (this._isCheckInFlight) {
-      return;
+      return { status: 'busy', currentVersion };
     }
     this._isCheckInFlight = true;
     try {
@@ -81,28 +96,37 @@ export class UpdateCheckService {
       }
 
       if (!isNewerVersion(tagName, environment.version)) {
-        if (isUserTriggered) {
+        if (isUserTriggered && !isSilent) {
           this._snackService.open({
             type: 'SUCCESS',
             msg: T.APP.UPDATE_CHECK.UP_TO_DATE,
             translateParams: { version: environment.version },
           });
         }
-        return;
+        return { status: 'up_to_date', currentVersion, latestVersion: tagName };
       }
+      const outcome: UpdateCheckOutcome = {
+        status: 'available',
+        currentVersion,
+        latestVersion: tagName,
+        releaseUrl: `https://github.com/super-productivity/super-productivity/releases/tag/${tagName}`,
+      };
+      if (isSilent) return outcome;
       if (
         !isUserTriggered &&
         localStorage.getItem(LS.UPDATE_CHECK_DISMISSED_VERSION) === tagName
       ) {
-        return;
+        return outcome;
       }
       this._showUpdateBanner(tagName);
+      return outcome;
     } catch (err) {
       // being offline is a normal state for the automatic check → info log only
       Log.log('Update check failed', { error: (err as Error)?.message });
-      if (isUserTriggered) {
+      if (isUserTriggered && !isSilent) {
         this._snackService.open({ type: 'ERROR', msg: T.APP.UPDATE_CHECK.ERROR });
       }
+      return { status: 'error', currentVersion };
     } finally {
       this._isCheckInFlight = false;
     }

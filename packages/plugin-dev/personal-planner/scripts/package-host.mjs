@@ -39,7 +39,7 @@ for (const file of ['README.md', 'VALIDACION.md']) {
   await copyFile(path.join(plugin, file), path.join(dist, file));
 }
 const output = path.join(dist, 'super-productivity-planner-web.zip');
-execFileSync('python3', [
+execFileSync(process.platform === 'win32' ? 'python' : 'python3', [
   '-c',
   `import pathlib,sys,zipfile
 browser,dist,repo,out=map(pathlib.Path,sys.argv[1:])

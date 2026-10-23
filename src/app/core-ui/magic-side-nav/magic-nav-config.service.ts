@@ -1,3 +1,5 @@
+import { WorkspacePluginStartupService } from '../../pages/workspace-plugin-startup.service';
+import { projectEntryRoute } from '../../pages/workspace-navigation';
 import { computed, effect, inject, Injectable, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { Store } from '@ngrx/store';
@@ -64,6 +66,10 @@ export class MagicNavConfigService {
   private readonly _isTagsExpanded = signal(lsGetBoolean(LS.IS_TAG_LIST_EXPANDED, true));
 
   // Data signals
+  private readonly _activeWorkContext = toSignal(
+    this._workContextService.activeWorkContext$,
+    { initialValue: null },
+  );
   private readonly _mainWorkContext = toSignal(
     this._workContextService.mainWorkContext$,
     { initialValue: null },
@@ -116,6 +122,14 @@ export class MagicNavConfigService {
   private readonly isSearchEnabled = computed(
     () => this._configService.appFeatures().isSearchEnabled,
   );
+  readonly plannerAvailable = computed(
+    () => this._pluginService.pluginStates().get('personal-planner')?.status === 'loaded',
+  );
+
+  projectRoute(id: string): string {
+    return projectEntryRoute(id, this.plannerAvailable());
+  }
+
   readonly areInitialTreesReady = computed(() => {
     const visibleProjects = this._visibleProjects();
     const tags = this._tags();
@@ -128,6 +142,8 @@ export class MagicNavConfigService {
   });
 
   constructor() {
+    // The unified sidebar must not rely on opening a plugin page first.
+    void inject(WorkspacePluginStartupService).ensureInitialized();
     // TODO these should probably live in the _menuTreeService
     effect(() => {
       const projects = this._visibleProjects();
@@ -406,28 +422,52 @@ export class MagicNavConfigService {
   private _buildMainRoutesItems(): NavItem[] {
     const items: NavItem[] = [];
 
-    if (this.isPlannerEnabled()) {
+    if (this.isPlannerEnabled() || this.isSchedulerEnabled() || this.plannerAvailable()) {
       items.push({
         type: 'route',
-        id: 'planner',
-        label: T.MH.PLANNER,
-        icon: NAV_SECTION_ICON.PLANNER,
-        route: '/planner',
-        featureConfigKey: 'isPlannerEnabled',
-        tourClass: 'tour-planner',
-      });
-    }
-
-    if (this.isSchedulerEnabled()) {
-      items.push({
-        type: 'route',
-        id: 'schedule',
-        label: T.MH.SCHEDULE,
+        id: 'calendar',
+        label: 'AW.CALENDAR',
         icon: NAV_SECTION_ICON.SCHEDULE,
-        route: '/schedule',
-        featureConfigKey: 'isSchedulerEnabled',
+        route: this.plannerAvailable()
+          ? '/calendar'
+          : this.isPlannerEnabled()
+            ? '/planner'
+            : '/schedule',
       });
     }
+    if (this.plannerAvailable()) {
+      items.push(
+        {
+          type: 'route',
+          id: 'projects-overview',
+          label: T.MH.PROJECTS,
+          icon: 'folder',
+          route: '/projects',
+        },
+        {
+          type: 'route',
+          id: 'review',
+          label: 'AW.REVIEW',
+          icon: 'fact_check',
+          route: '/review',
+        },
+        { type: 'route', id: 'goals', label: 'AW.GOALS', icon: 'flag', route: '/goals' },
+        {
+          type: 'route',
+          id: 'templates',
+          label: 'AW.TEMPLATES',
+          icon: 'library_books',
+          route: '/templates',
+        },
+      );
+    }
+    items.push({
+      type: 'route',
+      id: 'reports',
+      label: 'AW.REPORTS',
+      icon: 'insights',
+      route: `/${this._workContextService.activeWorkContextType === WorkContextType.PROJECT ? 'project' : 'tag'}/${this._activeWorkContext()?.id || 'TODAY'}/history`,
+    });
 
     if (this.isBoardsEnabled()) {
       items.push({
@@ -459,29 +499,33 @@ export class MagicNavConfigService {
     const pluginStates = this._pluginService.getAllPluginStates();
     const pluginIcons = this._pluginService.getPluginIconsSignal()();
 
-    return pluginEntries.map((entry) => {
-      // Prefer custom SVG icon if available, otherwise check if entry.icon is SVG path
-      const hasCustomSvgIcon = pluginIcons.has(entry.pluginId);
-      const isIconSvgPath = /\.svg$/i.test(entry.icon || '');
-      const isUploadedPlugin = pluginStates.get(entry.pluginId)?.type === 'uploaded';
+    return pluginEntries
+      .filter(
+        (entry) => entry.pluginId !== 'personal-planner' || !this.plannerAvailable(),
+      )
+      .map((entry) => {
+        // Prefer custom SVG icon if available, otherwise check if entry.icon is SVG path
+        const hasCustomSvgIcon = pluginIcons.has(entry.pluginId);
+        const isIconSvgPath = /\.svg$/i.test(entry.icon || '');
+        const isUploadedPlugin = pluginStates.get(entry.pluginId)?.type === 'uploaded';
 
-      let svgIcon: string | undefined;
-      if (hasCustomSvgIcon) {
-        svgIcon = `plugin-${entry.pluginId}-icon`;
-      } else if (isIconSvgPath && !isUploadedPlugin) {
-        svgIcon = `assets/bundled-plugins/${entry.pluginId}/${entry.icon}`;
-      }
+        let svgIcon: string | undefined;
+        if (hasCustomSvgIcon) {
+          svgIcon = `plugin-${entry.pluginId}-icon`;
+        } else if (isIconSvgPath && !isUploadedPlugin) {
+          svgIcon = `assets/bundled-plugins/${entry.pluginId}/${entry.icon}`;
+        }
 
-      return {
-        type: 'plugin' as const,
-        id: `plugin-${entry.pluginId}-${entry.label}`,
-        label: entry.label,
-        icon: entry.icon || 'extension',
-        ...(svgIcon && { svgIcon }),
-        pluginId: entry.pluginId,
-        action: entry.onClick,
-      };
-    });
+        return {
+          type: 'plugin' as const,
+          id: `plugin-${entry.pluginId}-${entry.label}`,
+          label: entry.label,
+          icon: entry.icon || 'extension',
+          ...(svgIcon && { svgIcon }),
+          pluginId: entry.pluginId,
+          action: entry.onClick,
+        };
+      });
   }
 
   // Public computed signals for expansion state (for component to check)
@@ -519,7 +563,7 @@ export class MagicNavConfigService {
       .afterClosed()
       .subscribe((newProjectId: string | undefined) => {
         if (newProjectId) {
-          this._router.navigate([`project/${newProjectId}/tasks`]);
+          this._router.navigate([this.projectRoute(newProjectId)]);
         }
       });
   }

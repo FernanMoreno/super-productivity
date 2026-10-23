@@ -15,6 +15,20 @@ export const ASSISTANT_ACCESS_SCOPES = [
   'tasks:read_history',
   'tasks:write',
   'time:write',
+  'timer:write',
+  'tasks:write_notes',
+  'projects:write',
+  'tags:write',
+  'idle:read',
+  'idle:write',
+  'settings:read',
+  'settings:write',
+  'sync:read',
+  'sync:write',
+  'updates:read',
+  'updates:write',
+  'issues:read',
+  'issues:write',
 ] as const;
 
 export type AssistantAccessScope = (typeof ASSISTANT_ACCESS_SCOPES)[number];

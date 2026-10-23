@@ -25,7 +25,7 @@ import {
 } from '../issue/providers/calendar/calendar.const';
 import { SnackService } from '../../core/snack/snack.service';
 import { take } from 'rxjs/operators';
-import { Subscription } from 'rxjs';
+import { Subscription, firstValueFrom } from 'rxjs';
 import { getDbDateStr } from '../../util/get-db-date-str';
 import { PluginIssueProviderRegistryService } from '../../plugins/issue-provider/plugin-issue-provider-registry.service';
 import { PluginHttpService } from '../../plugins/issue-provider/plugin-http.service';
@@ -127,6 +127,46 @@ END:VCALENDAR`;
     localStorage.clear();
     // Reset selector overrides to prevent test pollution
     store.resetSelectors();
+  });
+
+  it('exposes a planning cache snapshot without starting HTTP and preserves native linked-event filtering', async () => {
+    const provider = createMockProvider({ id: 'synthetic-provider' });
+    const event = {
+      id: 'free-event',
+      calProviderId: provider.id,
+      issueProviderKey: 'ICAL',
+      title: 'Synthetic appointment',
+      start: Date.now() + 60000,
+      duration: 3600000,
+    };
+    localStorage.setItem(
+      'SUP_CAL_EVENTS_CACHE',
+      JSON.stringify([
+        {
+          items: [
+            event,
+            { ...event, id: 'linked-new', legacyIds: ['linked-old'] },
+            { ...event, id: 'disabled-event', calProviderId: 'disabled-provider' },
+          ],
+        },
+      ]),
+    );
+    store.overrideSelector(selectCalendarProviders, [provider]);
+    store.overrideSelector(selectAllCalendarTaskEventIds, ['linked-old']);
+    store.refreshState();
+    const result = await firstValueFrom(service.getCachedPlanningSnapshot$());
+    expect(result.events.map((item) => item.id)).toEqual(['free-event']);
+    expect(result.warnings.length).toBe(1);
+    httpMock.expectNone(provider.icalUrl);
+  });
+
+  it('changes the planning guard when native cached events or exclusions change', () => {
+    const original = service.planningCacheFingerprint();
+    service.skippedEventIds$.next(['synthetic-skip']);
+    expect(service.planningCacheFingerprint()).not.toBe(original);
+    const skipped = service.planningCacheFingerprint();
+    localStorage.setItem('SUP_CAL_EVENTS_CACHE', JSON.stringify([{ items: [] }]));
+    expect(service.planningCacheFingerprint()).not.toBe(skipped);
   });
 
   describe('calendarEvents$', () => {

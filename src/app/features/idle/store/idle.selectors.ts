@@ -12,3 +12,8 @@ export const selectIdleTime = createSelector(
   selectIdleState,
   (state): number => state.idleTime,
 );
+
+export const selectIsIdleTimeFrozen = createSelector(
+  selectIdleState,
+  (state): boolean => state.isIdleTimeFrozen,
+);

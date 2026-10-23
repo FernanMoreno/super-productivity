@@ -33,6 +33,38 @@ export function createAdapter(api) {
     },
   });
   const adapter = {
+    operation: (action, params = {}) => call('plannerOperation', [action, params]),
+    async loadWorkflowUiState() {
+      const raw = await call('loadSyncedData', ['workflow-ui-state-v1']);
+      const value = raw === null ? { pending: [] } : JSON.parse(raw);
+      if (!value || !Array.isArray(value.pending))
+        throw Error('Estado del panel no válido.');
+      return { raw, value };
+    },
+    async saveWorkflowUiState(raw, value) {
+      const next = JSON.stringify(value);
+      if (!(await call('compareAndSwapSyncedData', [raw, next, 'workflow-ui-state-v1'])))
+        throw Error(
+          'El estado del panel cambió en otra ventana; vuelve a abrir la revisión.',
+        );
+      return next;
+    },
+    async loadUiState() {
+      const raw = await call('loadSyncedData', ['ui-state-v1']);
+      if (raw === null) return { raw, value: { pending: [] } };
+      const value = JSON.parse(raw);
+      if (!value || !Array.isArray(value.pending))
+        throw Error('Estado del panel no válido.');
+      return { raw, value };
+    },
+    async saveUiState(raw, value) {
+      const next = JSON.stringify(value);
+      if (!(await call('compareAndSwapSyncedData', [raw, next, 'ui-state-v1'])))
+        throw Error(
+          'El estado del panel cambió en otra ventana; vuelve a abrir la revisión.',
+        );
+      return next;
+    },
     prepare: (params) => call('plannerOperation', ['prepare', params]),
     apply: (params) => call('plannerOperation', ['apply', params]),
     operationStatus: (params) => operations.operationStatus(params),
@@ -117,6 +149,20 @@ export function createAdapter(api) {
       ])
         if (results[i].status === 'rejected')
           warnings.push(`Sin acceso a ${label}; información parcial.`);
+      let calendar = { calendarEvents: [], calendarWarnings: [] };
+      try {
+        if (typeof api.plannerOperation !== 'function')
+          throw Error('calendar API missing');
+        calendar = await call('plannerOperation', ['calendar_snapshot', {}]);
+        if (!Array.isArray(calendar?.calendarEvents))
+          throw Error('calendar result missing');
+      } catch {
+        calendar = {
+          calendarEvents: [],
+          calendarWarnings: ['Calendarios nativos no disponibles; capacidad parcial.'],
+        };
+      }
+      warnings.push(...(calendar.calendarWarnings || []));
       const snapshot = taskSnapshot(value(0, []), value(1, []));
       if (results[1].status === 'rejected') snapshot.hasIncompleteTasks = true;
       snapshot.timezone = timezone;
@@ -134,6 +180,8 @@ export function createAdapter(api) {
         );
       return {
         ...snapshot,
+        calendarEvents: calendar.calendarEvents,
+        calendarWarnings: calendar.calendarWarnings || [],
         projects: value(2, []),
         tags: value(3, []).filter((tag) => tag.id !== 'TODAY'),
         warnings: [...warnings, ...snapshot.warnings],

@@ -1,3 +1,6 @@
+@if (isToday()) {
+  <workspace-nav group="today" />
+}
 <work-view
   [backlogTasks]="backlogTasks()"
   [doneTasks]="doneTasks()"

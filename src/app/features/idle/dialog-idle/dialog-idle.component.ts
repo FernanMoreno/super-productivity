@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  HostListener,
   inject,
   OnDestroy,
   OnInit,
@@ -21,7 +22,8 @@ import { T } from '../../../t.const';
 import { IS_ELECTRON } from '../../../app.constants';
 import { SimpleCounter } from '../../simple-counter/simple-counter.model';
 import { Store } from '@ngrx/store';
-import { selectIdleTime } from '../store/idle.selectors';
+import { selectIdleTime, selectIsIdleTimeFrozen } from '../store/idle.selectors';
+import { freezeIdleTime } from '../store/idle.actions';
 import { LS } from '../../../core/persistence/storage-keys.const';
 import {
   DialogIdlePassedData,
@@ -93,6 +95,18 @@ export class DialogIdleComponent implements OnInit, OnDestroy {
     : EMPTY;
 
   idleTime = toSignal(this._store.select(selectIdleTime), { initialValue: 0 });
+  private _isIdleTimeFrozen = toSignal(this._store.select(selectIsIdleTimeFrozen), {
+    initialValue: false,
+  });
+
+  @HostListener('document:pointermove', ['$event'])
+  @HostListener('document:pointerdown', ['$event'])
+  @HostListener('document:keydown', ['$event'])
+  onUserActivity(event: Event): void {
+    if (event.isTrusted && !this._isIdleTimeFrozen()) {
+      this._store.dispatch(freezeIdleTime({ idleTime: this.idleTime() }));
+    }
+  }
 
   isNarrowScreen = inject(LayoutService).isXs;
 
@@ -227,8 +241,8 @@ export class DialogIdleComponent implements OnInit, OnDestroy {
     return Math.max(0, -this.splitTimeRemaining);
   }
 
-  // NOTE: the idle time keeps counting up while the dialog is open, so the remainder
-  // is only meaningful at minute granularity
+  // Before the user returns the idle time keeps growing; after return it is
+  // fixed for review. Keep the split remainder at minute granularity.
   get isSplitUnderAssigned(): boolean {
     return this.splitTimeRemaining >= 60000;
   }

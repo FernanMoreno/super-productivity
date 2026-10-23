@@ -1,4 +1,6 @@
 .content {
   // avoid one long line of difficult to read text, but also don't make the text less wide than the buttons
-  max-width: 420px;
+  max-width: min(68ch, 100%);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }

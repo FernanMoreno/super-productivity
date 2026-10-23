@@ -202,21 +202,6 @@ finish-day-btn,
 .add-more-or-finish {
   text-align: center;
   padding-bottom: var(--s);
-
-  .btn-wrapper {
-    display: block;
-
-    button {
-      min-width: 160px;
-      @include truncateText();
-      margin-left: var(--s);
-      margin-bottom: var(--s);
-
-      &:first-child {
-        margin-left: 0;
-      }
-    }
-  }
 }
 
 .no-tasks-illu-wrapper {
@@ -231,9 +216,24 @@ finish-day-btn,
     max-width: 100%;
   }
 
+  .empty-task-actions {
+    @include center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--s2);
+    width: calc(100% - var(--s4));
+
+    button {
+      max-width: 100%;
+      white-space: normal;
+      min-height: 44px;
+    }
+  }
+
   .no-tasks-label {
     font-size: 17px;
-    @include center;
+    margin: 0;
     text-align: center;
     font-weight: 400;
     color: var(--text-color);
@@ -258,7 +258,65 @@ finish-day-btn,
 }
 
 .overdue-tasks {
-  margin-top: var(--s2);
+  margin: var(--s2) 0 var(--s3);
+  padding: var(--s);
+  background: var(--card-bg);
+  border: 1px solid var(--divider-color);
+  border-inline-start: 4px solid var(--c-warn);
+  border-radius: 12px;
+}
+
+.date-task-group {
+  margin: 0 0 var(--s3);
+  padding: var(--s);
+  border: 1px solid var(--divider-color);
+  border-inline-start: 4px solid var(--divider-color);
+  border-radius: 12px;
+  background: var(--card-bg);
+
+  &.is-today {
+    border-inline-start-color: var(--c-primary);
+  }
+}
+
+.date-task-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s);
+  padding: var(--s) var(--s) var(--s2);
+
+  h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  time {
+    margin-inline-start: auto;
+    color: var(--text-color-muted);
+    font-size: 13px;
+  }
+}
+
+.date-task-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding-inline: var(--s-half);
+  border-radius: 12px;
+  background: var(--bg-lighter);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recurring-settings-group {
+  padding: var(--s);
+  margin-top: var(--s4);
+  border: 1px dashed var(--divider-color);
+  border-radius: 12px;
 }
 
 .overdue-btn-wrapper {

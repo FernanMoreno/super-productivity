@@ -1,4 +1,6 @@
 import { PLANNER_TOOLS } from './planner-tools';
+import { CONTROL_TOOLS } from './control-tools';
+import { WORKFLOW_TOOLS } from './workflow-tools';
 import {
   AssistantAccessScope,
   ASSISTANT_CAPTURE_PATH,
@@ -420,6 +422,8 @@ const ALL_TOOLS: ToolSpec[] = [
   listTags,
   createTask,
   ...PLANNER_TOOLS,
+  ...CONTROL_TOOLS,
+  ...WORKFLOW_TOOLS,
 ];
 
 const isGranted = (tool: ToolSpec, scopes: readonly AssistantAccessScope[]): boolean =>

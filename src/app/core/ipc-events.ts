@@ -56,6 +56,11 @@ export const ipcIdleTime$: Observable<number> = IS_ELECTRON
   ? ipcEvent$(IPC.IDLE_TIME).pipe(map(([idleTimeInMs]) => idleTimeInMs as number))
   : EMPTY;
 
+/** Duration of the ended absence, excluding time since the user returned. */
+export const ipcIdleEnd$: Observable<number> = IS_ELECTRON
+  ? ipcEvent$(IPC.IDLE_END).pipe(map(([idleTimeInMs]) => idleTimeInMs as number))
+  : EMPTY;
+
 export const ipcAnyFileDownloaded$: Observable<unknown> = IS_ELECTRON
   ? ipcEvent$(IPC.ANY_FILE_DOWNLOADED).pipe()
   : EMPTY;

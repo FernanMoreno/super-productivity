@@ -72,6 +72,24 @@ describe('ArchiveService', () => {
   });
 
   describe('moveTasksToArchiveAndFlushArchiveIfDue', () => {
+    it('rechecks permission and a synchronous snapshot immediately before its first archive write', async () => {
+      const task = createMockTask('task-guarded');
+      let changed = false;
+      await expectAsync(
+        service.moveTasksToArchiveAndFlushArchiveIfDue([task], {
+          beforeWrite: async () => {
+            changed = true;
+          },
+          atWrite: () => {
+            if (changed) throw new Error('stale snapshot');
+          },
+        }),
+      ).toBeRejectedWithError('stale snapshot');
+      expect(mockArchiveDbAdapter.saveArchiveYoung).not.toHaveBeenCalled();
+      expect(mockArchiveDbAdapter.saveArchiveOld).not.toHaveBeenCalled();
+      expect(mockStore.dispatch).not.toHaveBeenCalled();
+    });
+
     it('should save tasks to archiveYoung', async () => {
       const tasks = [createMockTask('task-1')];
 

@@ -4,6 +4,8 @@ import {
   ElementRef,
   inject,
   Input,
+  Output,
+  EventEmitter,
   OnDestroy,
   OnInit,
   signal,
@@ -77,6 +79,52 @@ export class PluginIndexComponent implements OnInit, OnDestroy {
   // Set true when embedding the component repeatedly (e.g. work-view embed
   // toggled on/off), so the plugin keeps its registrations across mounts.
   @Input() skipCleanupOnDestroy: boolean = false;
+
+  @Output() readonly presentationNavigationRequest = new EventEmitter<{
+    section: string;
+    projectId?: string;
+    taskId?: string;
+  }>();
+  @Output() readonly plannerStateChange = new EventEmitter<{
+    dirty: boolean;
+    workflowDirty?: boolean;
+    workflowContext?: { section: string; projectId?: string; taskId?: string };
+  }>();
+
+  discardPlannerDraft(scope: 'workflow' | 'all' = 'all'): void {
+    if (!this._isDestroyed && this.pluginId() === 'personal-planner') {
+      this._getPluginIframeWindow()?.postMessage(
+        { type: 'personal-planner:discard-draft', scope },
+        '*',
+      );
+    }
+  }
+
+  private _presentationContext?: {
+    type: 'personal-planner:navigate';
+    section: string;
+    projectId?: string;
+    taskId?: string;
+    embedded: true;
+  };
+
+  /** Presentation only: the existing authenticated API bridge still owns all writes. */
+  @Input() set presentationContext(value: typeof this._presentationContext) {
+    this._presentationContext = value;
+    this._sendPresentationContext();
+  }
+
+  private _sendPresentationContext(): void {
+    if (
+      !this._isDestroyed &&
+      this._presentationContext &&
+      this.pluginId() === 'personal-planner'
+    ) {
+      // srcdoc also runs on file:// in packaged builds, which requires '*'. The
+      // destination is this component's iframe, never a global bridge broadcast.
+      this._getPluginIframeWindow()?.postMessage(this._presentationContext, '*');
+    }
+  }
 
   private readonly _route = inject(ActivatedRoute);
   private readonly _router = inject(Router);
@@ -290,6 +338,68 @@ export class PluginIndexComponent implements OnInit, OnDestroy {
       if (!this._pluginService.getPluginIndexHtml(config.pluginId)) {
         return;
       }
+      if (
+        config.pluginId === 'personal-planner' &&
+        msgEvent.data?.type === 'personal-planner:request-navigation'
+      ) {
+        const { section, projectId, taskId } = msgEvent.data;
+        const sections = [
+          'today',
+          'workflow',
+          'week',
+          'goals',
+          'review',
+          'history',
+          'settings',
+          'templates',
+          'integrations',
+          'workflow-week',
+          'workflow-review',
+          'diagnostics',
+        ];
+        if (
+          sections.includes(section) &&
+          (projectId === undefined ||
+            (typeof projectId === 'string' &&
+              projectId.length > 0 &&
+              projectId.length <= 256)) &&
+          (taskId === undefined ||
+            (typeof taskId === 'string' && taskId.length > 0 && taskId.length <= 256))
+        ) {
+          this.presentationNavigationRequest.emit({
+            section,
+            ...(projectId ? { projectId } : {}),
+            ...(taskId ? { taskId } : {}),
+          });
+        }
+        return;
+      }
+      if (
+        config.pluginId === 'personal-planner' &&
+        msgEvent.data?.type === 'personal-planner:state' &&
+        typeof msgEvent.data.dirty === 'boolean'
+      ) {
+        const context = msgEvent.data.workflowContext;
+        const validContext =
+          context &&
+          typeof context.section === 'string' &&
+          (context.projectId === undefined || typeof context.projectId === 'string') &&
+          (context.taskId === undefined || typeof context.taskId === 'string');
+        this.plannerStateChange.emit({
+          dirty: msgEvent.data.dirty,
+          workflowDirty: msgEvent.data.workflowDirty === true,
+          ...(validContext
+            ? {
+                workflowContext: {
+                  section: context.section,
+                  projectId: context.projectId,
+                  taskId: context.taskId,
+                },
+              }
+            : {}),
+        });
+        return;
+      }
       await handlePluginMessage(msgEvent, config);
     };
 
@@ -358,7 +468,11 @@ export class PluginIndexComponent implements OnInit, OnDestroy {
   }
 
   onIframeLoad(): void {
+    if (this._isDestroyed) {
+      return;
+    }
     PluginLog.log('Plugin iframe loaded for plugin:', this.pluginId());
+    this._sendPresentationContext();
 
     // Reading the cached @ViewChild is fine HERE (unlike the message listener,
     // which uses _getPluginIframeWindow()): this fires on the iframe's `load`

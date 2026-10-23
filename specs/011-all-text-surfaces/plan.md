@@ -1,0 +1,5 @@
+# Plan
+
+Significant presentation change because it spans native host and iframe UI. Reuse current theme tokens and shared styles; no dependencies or API changes. Existing workspace/iframe ownership remains unchanged. Durable knowledge: previous workspace contract applies; no new architecture decision needed.
+
+Inspect the prior explicit exclusions and native dialog typography. Use Graphify for affected source and verify against source. Add an actual browser regression for opening the previously omitted availability explanation and warning panels; keep existing geometry and draft assertions. Extend common panel styles with compact variants for contextual status/board controls. Add shared native dialog reading rhythm, text wrapping and title/content separation, keeping existing scroll/focus behavior and component markup. Update confirm/prompt text widths to readable responsive measures. Validate plugin suites, native file checks, production build, composition, diff review and actual packaged dialogs/iframe views. Install and compare baseline tasks/grants/idle/timer, then leave normal app running.

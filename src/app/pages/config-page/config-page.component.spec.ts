@@ -11,6 +11,7 @@ import {
 } from '../../features/config/global-config.model';
 import { ActivatedRoute } from '@angular/router';
 import { PluginBridgeService } from '../../plugins/plugin-bridge.service';
+import { PluginService } from '../../plugins/plugin.service';
 import { EMPTY, of } from 'rxjs';
 import { signal } from '@angular/core';
 import { SyncWrapperService } from '../../imex/sync/sync-wrapper.service';
@@ -90,6 +91,7 @@ describe('ConfigPageComponent', () => {
         },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: PluginBridgeService, useValue: { shortcuts: signal([]) } },
+        { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
         { provide: SyncWrapperService, useValue: mockSyncWrapperService },
         { provide: ShareService, useValue: {} },
         { provide: MatDialog, useValue: mockMatDialog },

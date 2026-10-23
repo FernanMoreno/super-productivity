@@ -106,6 +106,7 @@ import { PluginIndexComponent } from '../../plugins/ui/plugin-index/plugin-index
 import { PluginBridgeService } from '../../plugins/plugin-bridge.service';
 import { PlainspaceClaimPoolComponent } from '../plainspace/claim-pool/claim-pool.component';
 import { PlainspaceSharedTask } from '../plainspace/plainspace-shared-task.model';
+import { projectTaskDateGroups } from './project-task-date-groups';
 
 // Stable reference used as the toSignal initial value below so the deselect
 // effect can tell "the customized list hasn't emitted yet" apart from a
@@ -212,9 +213,32 @@ export class WorkViewComponent implements OnInit, OnDestroy {
   );
 
   // TODO refactor all to signals
-  overdueTasks = toSignal(this._store.select(selectOverdueTasksWithSubTasks), {
-    initialValue: [],
-  });
+  private _activeContext = toSignal(this.workContextService.activeWorkContext$);
+  private _allOverdueTasks = toSignal(
+    this._store.select(selectOverdueTasksWithSubTasks),
+    {
+      initialValue: [],
+    },
+  );
+  overdueTasks = computed(() =>
+    this.isProjectContext() && !this.isOnTodayList()
+      ? this._allOverdueTasks().filter(
+          (task) => task.projectId === this._activeContext()?.id,
+        )
+      : this._allOverdueTasks(),
+  );
+  private _projectOverdueIds = computed(
+    () =>
+      new Set(
+        this.isProjectContext() && !this.isOnTodayList()
+          ? this.overdueTasks().map((task) => task.id)
+          : [],
+      ),
+  );
+  private _withoutProjectOverdue(tasks: TaskWithSubTasks[]): TaskWithSubTasks[] {
+    const ids = this._projectOverdueIds();
+    return ids.size ? tasks.filter((task) => !ids.has(task.id)) : tasks;
+  }
   private _laterTodayTaskCandidates = toSignal(
     this._store.select(selectLaterTodayTasksWithSubTasks),
     { initialValue: [] as TaskWithSubTasks[] },
@@ -273,12 +297,47 @@ export class WorkViewComponent implements OnInit, OnDestroy {
     { equal: fastArrayCompare },
   );
   undoneTasks = input.required<TaskWithSubTasks[]>();
-  customizedUndoneTasks = toSignal(
+  private _customizedUndoneTasks = toSignal(
     this.customizerService.customizeUndoneTasks(this.workContextService.undoneTasks$),
     { initialValue: INITIAL_CUSTOMIZED_UNDONE_TASKS },
   );
+  customizedUndoneTasks = computed(() => {
+    const customized = this._customizedUndoneTasks();
+    if (
+      !this._projectOverdueIds().size ||
+      customized === INITIAL_CUSTOMIZED_UNDONE_TASKS
+    ) {
+      return customized;
+    }
+    return {
+      ...customized,
+      list: this._withoutProjectOverdue(customized.list),
+      grouped:
+        customized.grouped &&
+        Object.fromEntries(
+          Object.entries(customized.grouped).map(([key, tasks]) => [
+            key,
+            this._withoutProjectOverdue(tasks),
+          ]),
+        ),
+      groups: customized.groups
+        ?.map((group) => ({
+          ...group,
+          tasks: this._withoutProjectOverdue(group.tasks),
+        }))
+        .filter((group) => group.tasks.length),
+    };
+  });
   doneTasks = input.required<TaskWithSubTasks[]>();
+  projectDateGroups = computed(() =>
+    projectTaskDateGroups(
+      this.customizedUndoneTasks().list,
+      this.todayStr(),
+      this._startOfNextDayDiffMs(),
+    ),
+  );
   backlogTasks = input.required<TaskWithSubTasks[]>();
+  visibleBacklogTasks = computed(() => this._withoutProjectOverdue(this.backlogTasks()));
   isShowBacklog = input<boolean>(false);
 
   hasDoneTasks = computed(() => this.doneTasks().length > 0);
@@ -343,7 +402,7 @@ export class WorkViewComponent implements OnInit, OnDestroy {
   );
 
   undoneTasksBySection = computed(() => {
-    const tasks = this.undoneTasks();
+    const tasks = this._withoutProjectOverdue(this.undoneTasks());
     const sections = this.sections();
 
     if (!sections.length) {
@@ -375,7 +434,8 @@ export class WorkViewComponent implements OnInit, OnDestroy {
   });
 
   isShowOverduePanel = computed(
-    () => this.isOnTodayList() && this.overdueTasks().length > 0,
+    () =>
+      (this.isOnTodayList() || this.isProjectContext()) && this.overdueTasks().length > 0,
   );
 
   isShowTimeWorkedWithoutBreak: boolean = true;
@@ -446,7 +506,7 @@ export class WorkViewComponent implements OnInit, OnDestroy {
       if (this._hasTaskInList(this.laterTodayTasks(), currentSelectedId)) return;
 
       if (
-        this.workContextService.activeWorkContextId === TODAY_TAG.id &&
+        this.isShowOverduePanel() &&
         this._hasTaskInList(this.overdueTasks(), currentSelectedId)
       )
         return;
@@ -791,9 +851,8 @@ export class WorkViewComponent implements OnInit, OnDestroy {
     // The done/overdue/later panels are siblings of the undone list, not
     // alternatives to it, so they are checked whatever it renders. Nothing here
     // is synced — but the collapse state is still a preference the user set, so
-    // each check mirrors the panel's own `@if`. That matters because the overdue
-    // and later-today lists are GLOBAL while their panels are Today-only: plain
-    // membership would flip a Today panel from a project page that never shows it.
+    // each check mirrors the panel's own `@if`. Overdue is scoped to the active
+    // project (global on Today); the later-today panel remains Today-only.
     //
     // These lists DO overlap: `_hasTaskInList` matches nested subtasks too, and
     // every selector attaches the full, unfiltered subtask family — so an undone
@@ -825,6 +884,8 @@ export class WorkViewComponent implements OnInit, OnDestroy {
    * pointless op to every device. Returns whether it opened something.
    */
   private _expandCollapsedUndoneContainerFor(taskId: string): boolean {
+    // Project overdue rows are rendered in their own panel, not their saved section.
+    if (this._projectOverdueIds().has(taskId)) return false;
     // Same order as the template's `@if` chain: `grouped` first, sections only
     // when there is no grouping. Testing `isCustomized()` first would diverge
     // while the customizer is switched off — that signal flips synchronously

@@ -41,6 +41,7 @@ const SHARED_CONTEXT_ROUTES: Routes = [
 export const TAG_CHILD_ROUTES: Routes = [...SHARED_CONTEXT_ROUTES];
 
 export const PROJECT_CHILD_ROUTES: Routes = [
+  { path: '', pathMatch: 'full', redirectTo: 'board' },
   {
     path: 'tasks',
     component: ProjectTaskPageComponent,

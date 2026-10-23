@@ -1,0 +1,7 @@
+# Contract
+
+The shared executable contract lives in electron/shared-with-frontend/assistant-control.model.ts and is consumed by both Electron tool projection and renderer validation. Human usage: docs/mcp-application-controls.md. MCP stays on initialized 2025-11-25/2025-06-18/2025-03-26 protocol support; no falsely advertised live listChanged/SSE capability. Reconnect clients after deployment to discover changed tools. Context7 primary source checked: /modelcontextprotocol/modelcontextprotocol/2025-11-25 (tools/list, strict schema, isError/structured content and list-change semantics).
+
+POST /assistant/control accepts only {tool,args,grantedScopes} with main-inserted source=mcp. Plain REST cannot claim this origin. Current device grants and forwarded grants must both cover the command. Read grants are checked after awaiting results; receipt lookup additionally carries internal original-required-scopes metadata which main validates and removes. Mutation results are preserved if grants change after commit. Unknown outcomes never imply safe replay.
+
+New permissions: timer:write, tasks:write_notes, projects:write, tags:write, idle:read/write, settings:read/write, sync:read/write, updates:read/write. The existing time:write and tasks:read_notes permissions remain independent. No synced schema additions. Device-local receipt storage is versioned and stores an argument SHA-256 fingerprint rather than note contents.

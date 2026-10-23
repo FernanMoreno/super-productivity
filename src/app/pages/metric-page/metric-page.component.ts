@@ -1,3 +1,4 @@
+import { WorkspaceNavComponent } from '../workspace-nav.component';
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { T } from '../../t.const';
 import { MetricComponent } from '../../features/metric/metric.component';
@@ -6,7 +7,7 @@ import { MetricComponent } from '../../features/metric/metric.component';
   selector: 'metric-page',
   templateUrl: './metric-page.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MetricComponent],
+  imports: [WorkspaceNavComponent, MetricComponent],
 })
 export class MetricPageComponent {
   T: typeof T = T;

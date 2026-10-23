@@ -1,6 +1,6 @@
 /* eslint-disable max-len */
 import { inject, Injectable, signal, OnDestroy } from '@angular/core';
-import { BehaviorSubject, Observable, of } from 'rxjs';
+import { BehaviorSubject, Observable, of, firstValueFrom } from 'rxjs';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { environment } from '../../environments/environment';
 import { PluginRunner } from './plugin-runner';
@@ -21,7 +21,6 @@ import {
   MAX_PLUGIN_ZIP_SIZE,
 } from './plugin.const';
 import { take } from 'rxjs/operators';
-import { firstValueFrom } from 'rxjs';
 import { PluginCleanupService } from './plugin-cleanup.service';
 import { PluginSecretService } from './secret/plugin-secret.service';
 import { PluginLoaderService } from './plugin-loader.service';
@@ -83,6 +82,7 @@ export class PluginService implements OnDestroy {
   private readonly _snackService = inject(SnackService);
 
   private _isInitialized = false;
+  private _initializationPromise?: Promise<void>;
   private _loadedPlugins: PluginInstance[] = [];
   private _pluginPaths: Map<string, string> = new Map(); // Store plugin ID -> path mapping
   private _pluginIndexHtml: Map<string, string> = new Map(); // Store plugin ID -> index.html content
@@ -105,14 +105,15 @@ export class PluginService implements OnDestroy {
   private _activeSidePanelPlugin$ = new BehaviorSubject<PluginInstance | null>(null);
   public readonly activeSidePanelPlugin$ = this._activeSidePanelPlugin$.asObservable();
 
-  async initializePlugins(): Promise<void> {
-    if (this._isInitialized) {
-      PluginLog.err(this._translateService.instant(T.PLUGINS.ALREADY_INITIALIZED));
-      return;
-    }
-
+  initializePlugins(): Promise<void> {
+    return this._isInitialized
+      ? Promise.resolve()
+      : (this._initializationPromise ??= this._initializePlugins().finally(() => {
+          this._initializationPromise = undefined;
+        }));
+  }
+  private async _initializePlugins(): Promise<void> {
     PluginLog.log('Initializing plugin system...');
-
     try {
       // Only load manifests, not the actual plugin code
       await this._discoverBuiltInPlugins();
@@ -1092,11 +1093,10 @@ export class PluginService implements OnDestroy {
         manifest.iFrame === true && extractedFiles['index.html'] !== undefined;
       if (hasIndexHtml) {
         const indexHtmlBytes = extractedFiles['index.html'];
-        // Reuse the manifest size limit for index.html.
-        if (indexHtmlBytes.length > MAX_PLUGIN_MANIFEST_SIZE) {
+        if (indexHtmlBytes.length > MAX_PLUGIN_CODE_SIZE) {
           throw new Error(
             this._translateService.instant(T.PLUGINS.INDEX_HTML_TOO_LARGE, {
-              maxSize: (MAX_PLUGIN_MANIFEST_SIZE / 1024).toFixed(1),
+              maxSize: (MAX_PLUGIN_CODE_SIZE / 1024).toFixed(1),
             }),
           );
         }

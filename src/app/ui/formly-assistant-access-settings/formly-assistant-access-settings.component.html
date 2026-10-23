@@ -92,6 +92,16 @@
       >{{ T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_TIME_WRITE | translate }}</mat-checkbox
     >
 
+    @for (permission of controlPermissions; track permission.scope) {
+      <mat-checkbox
+        class="scope"
+        [checked]="hasScope(permission.scope)"
+        [disabled]="isBusy()"
+        (change)="setScope(permission.scope, $event.checked, $event.source)"
+        >{{ permission.label | translate }}</mat-checkbox
+      >
+    }
+
     <h3 class="sub-section-heading">
       {{ T.GCF.MISC.ASSISTANT_ACCESS_KEY | translate }}
     </h3>

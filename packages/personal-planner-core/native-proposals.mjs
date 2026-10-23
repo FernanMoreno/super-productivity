@@ -45,7 +45,9 @@ export function proposeNativeTasks(profile, snapshot, dates, now = Date.now()) {
     const start = inheritedStart(task, snapshot);
     return start ? [{ task, interval: [start, start + remaining(task)] }] : [];
   });
-  const capacities = new Map(dates.map((day) => [day, availability(profile, day)]));
+  const capacities = new Map(
+    dates.map((day) => [day, availability(profile, day, snapshot)]),
+  );
   const pools = new Map(
     dates.map((day) => {
       const capacity = capacities.get(day);

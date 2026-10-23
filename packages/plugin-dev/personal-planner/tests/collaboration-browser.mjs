@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import { navigate, openGoals, openCalendar } from './navigation-helper.mjs';
 import { emptyProfile, createArea } from '../src/model.mjs';
 const html = await readFile(new URL('../dist/index.html', import.meta.url));
 const server = createServer((_, response) => {
@@ -9,7 +10,10 @@ const server = createServer((_, response) => {
   response.end(html);
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  executablePath: process.env.CHROME_BIN || undefined,
+});
 try {
   const context = await browser.newContext({ timezoneId: 'Europe/Madrid' }),
     page = await context.newPage(),
@@ -58,19 +62,18 @@ try {
       document.querySelector('form[data-id="a"] [name="name"]').value ===
       'Cambio externo limpio',
   );
-  const summary = page
-    .locator('summary')
-    .filter({ hasText: 'Actividades, objetivos y organización' });
-  if (!(await summary.evaluate((el) => el.parentElement.open))) await summary.click();
+  await openGoals(page);
   const area = page.locator('form[data-id="a"]');
   await area.locator('[name="name"]').fill('Borrador local');
   await page.evaluate(() => window.externalChange('Cambio externo mientras edito'));
   await page.locator('[data-action="reload-settings"]').waitFor();
   assert.equal(await area.locator('[name="name"]').inputValue(), 'Borrador local');
+  await navigate(page, 'goals');
   assert.match(
     await page.locator('#goals-content').innerText(),
     /Cambio externo mientras edito/,
   );
+  await openGoals(page);
   await area
     .getByRole('button', { name: 'Guardar Cambio externo limpio', exact: true })
     .click();
@@ -89,7 +92,9 @@ try {
       'Cambio externo mientras edito',
   );
   // Prepare a displayed suggestion, then change native tasks before accepting its review form.
+  await navigate(page, 'week');
   await page.locator('[data-action="review-proposal"]:visible').first().click();
+  await openCalendar(page);
   await page.evaluate(() =>
     localStorage.setItem(
       'native-tasks',
@@ -122,6 +127,7 @@ try {
     0,
   );
   await page.locator('#refresh').click();
+  await navigate(page, 'today');
   await page.getByRole('button', { name: 'Nueva ficticia', exact: true }).waitFor();
   assert.match(
     await page.locator('form[data-form="event"] [name="title"]').inputValue(),

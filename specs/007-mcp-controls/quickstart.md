@@ -1,0 +1,3 @@
+# Validation quickstart
+
+Use WSL Node24 and the installed Chromium from sp-planner-browsers; run Electron contract tests and the focused Angular assistant-control specs. Build Electron and production frontend. Launch packaged app with isolated copied user-data and independent XDG dirs. Query tools/list via the dependency-free stdio bridge, grant scoped capabilities in the isolated profile, and exercise representative controls; repeat operation IDs to verify single application. Keep the real profile untouched during mutations. Deploy archive with backup, preserve bundled planner assets, restart ordinary launcher and verify original task/config snapshots.

@@ -119,6 +119,9 @@ body.isIOS.isKeyboardVisible .cdk-overlay-pane.mat-mdc-dialog-panel {
 
 body .mat-mdc-dialog-content {
   overflow: auto;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  color: var(--text-color);
   // Let content fill available space within the constrained panel
   // Panel already has max-height, so content doesn't need its own
   flex: 1 1 auto;
@@ -127,6 +130,38 @@ body .mat-mdc-dialog-content {
   mat-form-field {
     display: block;
   }
+
+  :where(p, ul, ol, .content) {
+    max-inline-size: 72ch;
+  }
+
+  :where(p, ul, ol) + :where(p, ul, ol, form) {
+    margin-block-start: var(--s2);
+  }
+
+  :where(pre) {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: var(--s2);
+    border-radius: var(--s);
+    background: var(--bg);
+    line-height: 1.6;
+  }
+
+  :where(textarea) {
+    line-height: 1.65;
+  }
+}
+
+body :where(.mat-mdc-dialog-actions) {
+  border-block-start: 1px solid var(--extra-border-color);
+  gap: var(--s);
+}
+
+body .mat-mdc-dialog-title {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  gap: var(--s);
 }
 
 body .mat-mdc-dialog-surface {

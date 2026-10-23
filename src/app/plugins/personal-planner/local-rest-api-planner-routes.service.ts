@@ -15,6 +15,7 @@ import {
 } from '../../core/electron/local-rest-api-response';
 import { PLANNER_SCOPES, PlannerAccessService } from './planner-access.service';
 import { PlannerOperationsService } from './planner-operations.service';
+import { workflowRequiredScopes } from '../../../../electron/shared-with-frontend/workflow-contract.model';
 const object = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
 const EDIT_COMMANDS = new Set([
@@ -80,6 +81,11 @@ export class LocalRestApiPlannerRoutesService implements LocalRestApiFeatureRout
     try {
       await this._access.authorize(action);
       if (
+        (action === 'workflow_query' || action === 'workflow_command') &&
+        !workflowRequiredScopes(action, params).every((scope) => granted.includes(scope))
+      )
+        throw new PlannerError('NOT_PERMITTED', 'Permisos de integración insuficientes.');
+      if (
         action === 'edit' &&
         (!object(params['command']) ||
           !EDIT_COMMANDS.has(String(params['command']['type'])))
@@ -90,7 +96,16 @@ export class LocalRestApiPlannerRoutesService implements LocalRestApiFeatureRout
         );
       if (action === 'operation_status') {
         const original = String(params['action']);
-        if (!['edit', 'task', 'log_time', 'apply'].includes(original))
+        if (
+          ![
+            'edit',
+            'task',
+            'log_time',
+            'apply',
+            'review_advance',
+            'correct_time',
+          ].includes(original)
+        )
           throw new PlannerError('INVALID_ARGUMENTS', 'Acción de recibo inválida.');
         if (!PLANNER_SCOPES[original].every((scope) => granted.includes(scope)))
           throw new PlannerError(
@@ -100,6 +115,18 @@ export class LocalRestApiPlannerRoutesService implements LocalRestApiFeatureRout
         await this._access.authorize(original);
       }
       const result = await this._operations.runMcp(action, params);
+      if (action === 'workflow_query' && params['view'] === 'receipt') {
+        const original = String(result['requiredAction']);
+        if (
+          !Object.hasOwn(PLANNER_SCOPES, original) ||
+          !PLANNER_SCOPES[original].every((scope) => granted.includes(scope))
+        )
+          throw new PlannerError('NOT_PERMITTED', 'Permisos del recibo insuficientes.');
+        return createSuccessResponse(request.requestId, 200, {
+          ...result,
+          _requiredScopes: PLANNER_SCOPES[original],
+        });
+      }
       return createSuccessResponse(request.requestId, 200, result);
     } catch (error) {
       if (error instanceof PlannerError && error.code === 'NOT_PERMITTED')

@@ -49,6 +49,25 @@ export class FormlyAssistantAccessSettingsComponent
   readonly T = T;
   readonly url = `http://${LOCAL_REST_API_HOST}:${LOCAL_REST_API_PORT}${ASSISTANT_ACCESS_PATH}`;
   readonly port = LOCAL_REST_API_PORT;
+  readonly controlPermissions: ReadonlyArray<{
+    scope: AssistantAccessScope;
+    label: string;
+  }> = [
+    { scope: 'timer:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_TIMER_WRITE },
+    { scope: 'tasks:write_notes', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_NOTES_WRITE },
+    { scope: 'projects:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_PROJECTS_WRITE },
+    { scope: 'tags:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_TAGS_WRITE },
+    { scope: 'idle:read', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_IDLE_READ },
+    { scope: 'idle:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_IDLE_WRITE },
+    { scope: 'settings:read', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_SETTINGS_READ },
+    { scope: 'settings:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_SETTINGS_WRITE },
+    { scope: 'sync:read', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_SYNC_READ },
+    { scope: 'sync:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_SYNC_WRITE },
+    { scope: 'updates:read', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_UPDATES_READ },
+    { scope: 'updates:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_UPDATES_WRITE },
+    { scope: 'issues:read', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_ISSUES_READ },
+    { scope: 'issues:write', label: T.GCF.MISC.ASSISTANT_ACCESS_SCOPE_ISSUES_WRITE },
+  ];
   readonly state = signal<AssistantAccessState | null>(null);
   readonly isBusy = signal(false);
   /** Only set right after generating; never read back from main. */

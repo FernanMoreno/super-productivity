@@ -25,6 +25,23 @@
     }
   </header>
 
+  @if (
+    plannerPluginService.pluginStates().get('personal-planner')?.status === 'loaded' &&
+    task().projectId
+  ) {
+    <a
+      mat-button
+      [routerLink]="
+        task().projectId === 'INBOX_PROJECT'
+          ? ['/projects']
+          : ['/project', task().projectId, 'board']
+      "
+      [queryParams]="{ taskId: task().id }"
+    >
+      <mat-icon>checklist</mat-icon>{{ 'AW.TASK_CRITERIA' | translate }}
+    </a>
+  }
+
   @if (isShowSubTasksPanel()) {
     <task-detail-item
       (collapseParent)="collapseParent()"

@@ -1,11 +1,17 @@
 .content {
-  max-width: 300px;
+  max-width: min(56ch, 100%);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 :host mat-dialog-content.isNoMsg {
-  padding: 0;
+  padding: var(--s2);
 }
 
 :host mat-form-field {
   margin-bottom: 0;
+}
+:host {
+  display: block;
+  min-width: min(28rem, calc(100vw - 64px));
 }

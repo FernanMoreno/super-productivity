@@ -583,6 +583,23 @@ describe('TaskService', () => {
       expect(callOrder).toEqual(['persist-archive', 'dispatch']);
     });
 
+    it('keeps a concurrently changed live task when guarded archive persistence already started', async () => {
+      const task = createMockTaskWithSubTasks(createMockTask('task-1'));
+      let changed = false;
+      archiveService.moveTasksToArchiveAndFlushArchiveIfDue.and.callFake(async () => {
+        changed = true;
+      });
+      store.dispatch = jasmine.createSpy('dispatch');
+      await expectAsync(
+        service.moveToArchive(task, {
+          beforeRemove: () => {
+            if (changed) throw new Error('task changed during write');
+          },
+        }),
+      ).toBeRejectedWithError('task changed during write');
+      expect(store.dispatch).not.toHaveBeenCalled();
+    });
+
     it('should coalesce concurrent archive requests for the same task', async () => {
       const task = createMockTaskWithSubTasks(createMockTask('task-1'));
       let finishPersistence: (() => void) | undefined;
@@ -1076,6 +1093,26 @@ describe('TaskService', () => {
       expect(addCall).toBeTruthy();
       expect(syncCall).toBeTruthy();
       expect(addCall![0].date).toBe(syncCall![0].date);
+    });
+
+    it('can add a known duration today without inventing work session bounds', () => {
+      const task = createMockTask('task-1');
+      service.addTimeSpentAndSync(task, 5000, '2026-01-05', true);
+      expect(store.dispatch).toHaveBeenCalledWith(
+        jasmine.objectContaining({
+          type: '[TimeTracking] Add time spent',
+          date: '2026-01-05',
+          isBackfill: true,
+        }),
+      );
+      expect(store.dispatch).toHaveBeenCalledWith(
+        jasmine.objectContaining({
+          type: '[TimeTracking] Sync time spent',
+          taskId: task.id,
+          date: '2026-01-05',
+          duration: 5000,
+        }),
+      );
     });
 
     it('should not mark time for today as back-filled', () => {

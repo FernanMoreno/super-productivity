@@ -1,4 +1,6 @@
-import { ChangeDetectorRef } from '@angular/core';
+import { ChangeDetectorRef, signal } from '@angular/core';
+import { PluginService } from '../../plugins/plugin.service';
+import { WorkspaceNavComponent } from '../../pages/workspace-nav.component';
 import {
   ComponentFixture,
   fakeAsync,
@@ -116,7 +118,17 @@ describe('HistoryComponent', () => {
         { provide: SimpleCounterService, useValue: { enabledSimpleCounters$: of([]) } },
         { provide: WorklogService, useValue: worklogServiceSpy },
       ],
-    }).compileComponents();
+    })
+      .overrideComponent(WorkspaceNavComponent, {
+        set: {
+          template: '',
+          providers: [
+            { provide: WorkContextService, useValue: { activeWorkContext$: of(null) } },
+            { provide: PluginService, useValue: { pluginStates: signal(new Map()) } },
+          ],
+        },
+      })
+      .compileComponents();
 
     fixture = TestBed.createComponent(HistoryComponent);
     store = TestBed.inject(Store);

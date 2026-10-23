@@ -10,6 +10,8 @@ const profile = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sp-mcp-re
 const xdgDir = path.join(profile, 'xdg');
 fs.mkdirSync(xdgDir);
 let app;
+let diagnosticPage;
+const rendererErrors = [];
 let key;
 let id;
 const endpoint = 'http://127.0.0.1:3876/mcp';
@@ -93,6 +95,11 @@ async function launch() {
     timeout: 60000,
   });
   const page = await app.firstWindow();
+  diagnosticPage = page;
+  page.on('pageerror', (error) => rendererErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') rendererErrors.push(message.text());
+  });
   await page.waitForFunction(() => !!window.ea?.getAssistantAccessState);
   await page.evaluate(() => {
     for (const key of [
@@ -255,6 +262,22 @@ async function launch() {
       location.hash = '/config';
     });
     await page.locator('.page-settings').waitFor();
+    // Set the temporary profile through the native settings UI before importing
+    // the plugin; its i18n follows host localization, whose default is English.
+    const localization = page.locator('config-section').filter({
+      has: page
+        .locator('.collapsible-title')
+        .filter({ hasText: /^(Localization|Localización)$/ }),
+    });
+    await localization.locator('.collapsible-header').click();
+    const language = localization.getByRole('combobox').first();
+    if ((await language.evaluate((node) => node.tagName)) === 'SELECT') {
+      await language.selectOption('es');
+    } else {
+      await language.click();
+      await page.getByRole('option', { name: 'Español', exact: true }).click();
+    }
+    await expect(localization.locator('.collapsible-title')).toHaveText('Localización');
     await page.getByRole('tab').filter({ hasText: 'Plugins' }).click();
     await page
       .locator('input[type="file"][accept=".zip"]')
@@ -300,6 +323,70 @@ async function launch() {
     await expect(area.locator('[name="dailyMinutes"]')).toHaveValue('40', {
       timeout: 20000,
     });
+    // Isolate first-capture assertions from the later legacy proposal suite.
+    // A task created after a captured day must not rewrite its historical baseline.
+    if (process.env.PLANNER_GUIDED === '1') {
+      const { runGuidedScenario } = require('./planner-guided-scenario.cjs');
+      const checkpoint = await runGuidedScenario({ page, call, waitUntilReady });
+      await app.close();
+      app = undefined;
+      await assert.rejects(fetch(endpoint, { method: 'POST' }));
+      page = await launch();
+      await waitUntilReady();
+      const resumed = (
+        await call('planner_review', {
+          from: checkpoint.from,
+          to: checkpoint.to,
+          reviewId: checkpoint.reviewId,
+        })
+      ).structuredContent;
+      assert.equal(resumed.session.id, checkpoint.reviewId);
+      assert.ok(Object.keys(resumed.session.decisions).length);
+      assert.equal(
+        (await call('planner_reorganizations', { historyId: checkpoint.historyId }))
+          .structuredContent.entry.status,
+        'confirmed',
+      );
+      assert.equal(
+        (
+          await call('planner_operation_status', {
+            action: 'apply',
+            operationId: checkpoint.operationId,
+          })
+        ).structuredContent.status,
+        'applied',
+      );
+      const reopened = (
+        await call('planner_query', { from: checkpoint.from, to: checkpoint.to })
+      ).structuredContent;
+      assert.equal(
+        reopened.days[0].progress.find(
+          (area) => area.activityId === checkpoint.activityId,
+        ).dailyMinutes,
+        checkpoint.dailyMinutes,
+      );
+      await page.evaluate(() => {
+        location.hash = '/plugins/personal-planner/index';
+      });
+      const reopenedFrame = page.frameLocator('plugin-index iframe');
+      await reopenedFrame.locator('form[data-guided="review-load"]').waitFor();
+      const completed = await reopenedFrame
+        .locator('body')
+        .evaluate(
+          async (_body, taskId) =>
+            (await window.PluginAPI.getTasks()).find((task) => task.id === taskId),
+          checkpoint.taskId,
+        );
+      assert.equal(completed.doneOn, checkpoint.doneOn);
+      assert.equal(completed.isDone, true);
+      await app.close();
+      app = undefined;
+      await assert.rejects(fetch(endpoint, { method: 'POST' }));
+      console.log(
+        'PASS real Electron guided suite: isolated baseline, UI/MCP, full process restart preserving review/history/receipts/progress/completion and connection loss. Fictitious profile only.',
+      );
+      return;
+    }
     // Native task changes invalidate a prepared proposal; nothing moves silently.
     const from = new Date(Date.parse(today + 'T12:00:00Z') + 86400000)
       .toISOString()
@@ -367,26 +454,39 @@ async function launch() {
     );
     // Prepare from the actual iframe bridge; no assistant credential is involved.
     await frame.locator('[data-action="prepare-shared"]').click();
-    await expect(frame.locator('[data-form="apply-proposal"]')).toBeVisible();
+    await expect(frame.locator('[data-guided="apply-proposal"]')).toBeVisible();
     assert.equal(
-      await frame.locator('[data-form="apply-proposal"] input:checked').count(),
+      await frame.locator('[data-guided="apply-proposal"] input:checked').count(),
       0,
     );
-    const uiTask = (await call('planner_task', {
-      operationId:'ui-native-create-smoke',
-      fields:{title:'Tarea ficticia desde panel',timeEstimate:900000},
-    })).structuredContent;
-    assert.equal(uiTask.status,'applied');
+    const uiTask = (
+      await call('planner_task', {
+        operationId: 'ui-native-create-smoke',
+        fields: { title: 'Tarea ficticia desde panel', timeEstimate: 900000 },
+      })
+    ).structuredContent;
+    assert.equal(uiTask.status, 'applied');
     await page.evaluate(() => window.ea.setAssistantAccessEnabled(false));
     await frame.locator('[data-action="prepare-shared"]').click();
-    const uiAlternative = frame.locator('[data-form="apply-proposal"] li').filter({hasText:'Tarea ficticia desde panel'});
+    const uiAlternative = frame
+      .locator('[data-guided="apply-proposal"] li')
+      .filter({ hasText: 'Tarea ficticia desde panel' });
     await uiAlternative.locator('input[type="checkbox"]').check();
-    await frame.locator('[data-form="apply-proposal"] button').click();
-    await expect(frame.locator('#proposal-review')).toHaveText('Selección aplicada y confirmada por la aplicación.');
+    const confirmConflicts = frame.locator(
+      '[data-guided="apply-proposal"] [name="acceptConflicts"]',
+    );
+    if (await confirmConflicts.count()) await confirmConflicts.check();
+    await frame.locator('[data-guided="apply-proposal"] button').click();
+    await expect(frame.locator('#guided-proposal')).toHaveText('Operación confirmada.');
     await page.evaluate(() => window.ea.setAssistantAccessEnabled(true));
     await waitUntilReady();
-    const uiNativeResult = (await call('planner_query',{from:today,to:from})).structuredContent;
-    assert.ok(uiNativeResult.days.flatMap((day)=>day.tasks).some((task)=>task.id===uiTask.taskId && task.dueWithTime));
+    const uiNativeResult = (await call('planner_query', { from: today, to: from }))
+      .structuredContent;
+    assert.ok(
+      uiNativeResult.days
+        .flatMap((day) => day.tasks)
+        .some((task) => task.id === uiTask.taskId && task.dueWithTime),
+    );
     // An official SDK client exercises discovery and a real query without inference.
     if (process.env.PLANNER_MCP_SDK_PATH) {
       const { Client } = require(
@@ -504,6 +604,38 @@ async function launch() {
     console.log(
       'PASS real Electron: filtered discovery, denied scope, native task/time and retries, ZIP import, MCP→UI and UI→MCP, stale proposal, selected apply, reload/IndexedDB receipts, app closed, optional official SDK. Fictitious profile only.',
     );
+  } catch (error) {
+    const directory = fs.mkdtempSync(
+      path.join(require('node:os').tmpdir(), 'sp-planner-failure-'),
+    );
+    const redact = (value) =>
+      String(value)
+        .split(key || '__no_credential__')
+        .join('[credential redacted]');
+    try {
+      if (diagnosticPage && !diagnosticPage.isClosed()) {
+        await diagnosticPage.screenshot({
+          path: path.join(directory, 'screen.png'),
+          fullPage: true,
+        });
+        await fs.promises.writeFile(
+          path.join(directory, 'page.txt'),
+          redact(await diagnosticPage.locator('body').innerText()),
+        );
+        console.error('Synthetic-profile failure diagnostics: ' + directory);
+        console.error(
+          JSON.stringify({
+            cards: await diagnosticPage
+              .locator('plugin-management mat-card')
+              .allTextContents(),
+            errors: rendererErrors.map(redact).slice(-12),
+          }),
+        );
+      }
+    } catch {
+      console.error('Failure diagnostics unavailable.');
+    }
+    throw error;
   } finally {
     if (sdkClient) await sdkClient.close();
     if (app) await app.close();

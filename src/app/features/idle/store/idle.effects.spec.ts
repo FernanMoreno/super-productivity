@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideMockActions } from '@ngrx/effects/testing';
-import { BehaviorSubject, ReplaySubject, Subject } from 'rxjs';
+import { BehaviorSubject, Observable, ReplaySubject, Subject } from 'rxjs';
 import { Action } from '@ngrx/store';
 import { IdleEffects } from './idle.effects';
 import { provideMockStore, MockStore } from '@ngrx/store/testing';
@@ -16,7 +16,8 @@ import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
 import { IPC } from '../../../../../electron/shared-with-frontend/ipc-events.const';
 import { selectIdleConfig } from '../../config/store/global-config.reducer';
 import { selectIsSessionRunning } from '../../focus-mode/store/focus-mode.selectors';
-import { selectIdleTime, selectIsIdle } from './idle.selectors';
+import { selectIdleState, selectIdleTime, selectIsIdle } from './idle.selectors';
+import { initialIdleState } from './idle.reducer';
 import { openIdleDialog, triggerIdle } from './idle.actions';
 import { HydrationStateService } from '../../../op-log/apply/hydration-state.service';
 
@@ -79,6 +80,7 @@ describe('IdleEffects', () => {
         { provide: LOCAL_ACTIONS, useValue: actions$ },
         provideMockStore({
           selectors: [
+            { selector: selectIdleState, value: initialIdleState },
             {
               selector: selectIdleConfig,
               value: {
@@ -121,6 +123,32 @@ describe('IdleEffects', () => {
   });
 
   describe('triggerIdleWhenEnabled$', () => {
+    it('starts a new interval after review instead of reusing the host cumulative duration', () => {
+      setup();
+      const now = spyOn(Date, 'now').and.returnValue(1000000);
+      const emitted: unknown[] = [];
+      const triggerSub = effects.triggerIdleWhenEnabled$.subscribe((a) =>
+        emitted.push(a),
+      );
+      const resultSub = effects.handleIdleDialogResult$.subscribe();
+      idleCallback?.(null as unknown as Event, 300000);
+      actions$.next({
+        type: '[Idle] Dialog result',
+        idleTime: 300000,
+        isResetBreakTimer: false,
+        wasFocusSessionRunning: false,
+        trackItems: [],
+      } as Action);
+      now.and.returnValue(1030000);
+      idleCallback?.(null as unknown as Event, 330000);
+      expect(emitted.length).toBe(1);
+      now.and.returnValue(1300000);
+      idleCallback?.(null as unknown as Event, 600000);
+      expect(emitted[1]).toEqual(triggerIdle({ idleTime: 300000 }));
+      triggerSub.unsubscribe();
+      resultSub.unsubscribe();
+    });
+
     it('should suppress idle when isSuppressIdleDuringFocusMode is true and a work session is running', (done) => {
       setup({ isSuppressIdleDuringFocusMode: true, isFocusSessionRunning: true });
 
@@ -191,6 +219,44 @@ describe('IdleEffects', () => {
         expect(emitted[0]).toEqual(triggerIdle({ idleTime: 120000 }));
         done();
       }, 200);
+    });
+  });
+
+  describe('freeze idle review', () => {
+    it('cancels the polling timer without closing or assigning the review', () => {
+      setup();
+      const cancel = jasmine.createSpy('cancelIdlePoll');
+      const internal = effects as unknown as {
+        _clearIdlePollInterval: () => void;
+        freezeIdleTime$: Observable<Action>;
+      };
+      internal._clearIdlePollInterval = cancel;
+      expect(internal.freezeIdleTime$).toBeDefined();
+      if (!internal.freezeIdleTime$) return;
+      const subscription = internal.freezeIdleTime$.subscribe();
+      actions$.next({ type: '[Idle] Freeze idle time', idleTime: 179000 } as Action);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(TestBed.inject(TaskService).setCurrentId).not.toHaveBeenCalled();
+      subscription.unsubscribe();
+    });
+
+    it('does not restart a frozen interval after deferred initialization', () => {
+      setup();
+      store.overrideSelector(selectIdleState, {
+        ...initialIdleState,
+        isIdle: true,
+        idleTime: 179000,
+        isIdleTimeFrozen: true,
+      } as typeof initialIdleState);
+      store.refreshState();
+      const dispatch = spyOn(store, 'dispatch');
+      const internal = effects as unknown as {
+        _initIdlePoll: (duration: number) => void;
+        _cancelIdlePoll: () => void;
+      };
+      internal._initIdlePoll(120000);
+      expect(dispatch).not.toHaveBeenCalled();
+      internal._cancelIdlePoll();
     });
   });
 

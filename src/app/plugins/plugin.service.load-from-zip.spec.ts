@@ -11,7 +11,11 @@ import { IssueSyncAdapterRegistryService } from '../features/issue/two-way-sync/
 import { T } from '../t.const';
 import { PluginCacheService } from './plugin-cache.service';
 import { PluginCleanupService } from './plugin-cleanup.service';
-import { MAX_PLUGIN_TRANSLATIONS_TOTAL_SIZE } from './plugin.const';
+import {
+  MAX_PLUGIN_TRANSLATIONS_TOTAL_SIZE,
+  MAX_PLUGIN_CODE_SIZE,
+  MAX_PLUGIN_MANIFEST_SIZE,
+} from './plugin.const';
 import { PluginHooksService } from './plugin-hooks';
 import { PluginI18nService } from './plugin-i18n.service';
 import { PluginIssueProviderRegistryService } from './issue-provider/plugin-issue-provider-registry.service';
@@ -156,6 +160,52 @@ describe('PluginService loadPluginFromZip iframe-only plugins', () => {
     service = TestBed.inject(PluginService);
   });
 
+  it('shares concurrent startup calls between native navigation and the iframe host', async () => {
+    const lifecycle = service as unknown as {
+      _discoverBuiltInPlugins: () => Promise<void>;
+      _discoverUploadedPlugins: () => Promise<void>;
+      _loadEnabledPlugins: () => Promise<void>;
+    };
+    let release!: () => void;
+    const discover = spyOn(lifecycle, '_discoverBuiltInPlugins').and.returnValue(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    spyOn(lifecycle, '_discoverUploadedPlugins').and.resolveTo();
+    const load = spyOn(lifecycle, '_loadEnabledPlugins').and.resolveTo();
+    const first = service.initializePlugins();
+    const second = service.initializePlugins();
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(service.isInitialized()).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(service.isInitialized()).toBe(true);
+    await service.initializePlugins();
+    expect(discover).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows startup to retry after an initialization failure', async () => {
+    const lifecycle = service as unknown as {
+      _discoverBuiltInPlugins: () => Promise<void>;
+      _discoverUploadedPlugins: () => Promise<void>;
+      _loadEnabledPlugins: () => Promise<void>;
+    };
+    const discover = spyOn(lifecycle, '_discoverBuiltInPlugins').and.rejectWith(
+      new Error('startup failed'),
+    );
+    spyOn(lifecycle, '_discoverUploadedPlugins').and.resolveTo();
+    spyOn(lifecycle, '_loadEnabledPlugins').and.resolveTo();
+    await expectAsync(service.initializePlugins()).toBeRejectedWithError(
+      'startup failed',
+    );
+    expect(service.isInitialized()).toBe(false);
+    discover.and.resolveTo();
+    await service.initializePlugins();
+    expect(service.isInitialized()).toBe(true);
+  });
+
   it('loads an iframe plugin zip without plugin.js when index.html exists', async () => {
     const indexHtml = '<!doctype html><html><body>Plugin UI</body></html>';
     const files: Record<string, string> = {};
@@ -182,6 +232,47 @@ describe('PluginService loadPluginFromZip iframe-only plugins', () => {
       undefined,
     );
     expect(service.getPluginIndexHtml(iframeManifest.id)).toBe(indexHtml);
+  });
+
+  it('accepts an iframe HTML bundle above the manifest limit and retains it in cache', async () => {
+    const indexHtml =
+      '<!doctype html><html><body>' + 'x'.repeat(167 * 1024) + '</body></html>';
+    const files: Record<string, string> = {};
+    files['manifest.json'] = JSON.stringify(iframeManifest);
+    files['index.html'] = indexHtml;
+    const result = await service.loadPluginFromZip(createZipFile(files));
+    expect(result.loaded).toBeTrue();
+    expect(service.getPluginIndexHtml(iframeManifest.id)).toBe(indexHtml);
+    expect(pluginCache.storePlugin).toHaveBeenCalledWith(
+      iframeManifest.id,
+      JSON.stringify(iframeManifest),
+      '',
+      indexHtml,
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
+
+  it('rejects HTML above the code limit before caching or executing a plugin', async () => {
+    const files: Record<string, string> = {};
+    files['manifest.json'] = JSON.stringify(iframeManifest);
+    files['index.html'] = 'x'.repeat(MAX_PLUGIN_CODE_SIZE + 1);
+    await expectAsync(service.loadPluginFromZip(createZipFile(files))).toBeRejected();
+    expect(pluginCache.storePlugin).not.toHaveBeenCalled();
+    expect(pluginRunner.loadPlugin).not.toHaveBeenCalled();
+  });
+
+  it('retains the separate smaller manifest size limit', async () => {
+    const files: Record<string, string> = {};
+    files['manifest.json'] = JSON.stringify({
+      ...iframeManifest,
+      description: 'x'.repeat(MAX_PLUGIN_MANIFEST_SIZE),
+    });
+    files['index.html'] = '<html>Valid</html>';
+    await expectAsync(service.loadPluginFromZip(createZipFile(files))).toBeRejected();
+    expect(pluginCache.storePlugin).not.toHaveBeenCalled();
+    expect(pluginRunner.loadPlugin).not.toHaveBeenCalled();
   });
 
   it('loads declared translations before executing an uploaded plugin', async () => {

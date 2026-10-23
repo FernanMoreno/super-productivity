@@ -19,7 +19,7 @@ describe('PluginIndexComponent', () => {
   let pluginService: jasmine.SpyObj<PluginService>;
   let pluginBridge: jasmine.SpyObj<PluginBridgeService>;
 
-  const setup = async (): Promise<void> => {
+  const setup = async (pluginId = PLUGIN_ID): Promise<void> => {
     pluginService = jasmine.createSpyObj<PluginService>('PluginService', [
       'isInitialized',
       'initializePlugins',
@@ -37,7 +37,7 @@ describe('PluginIndexComponent', () => {
       '<!doctype html><html><head></head><body><div id="root"></div></body></html>',
     );
     pluginService.getAllPlugins.and.resolveTo([
-      { manifest: { id: PLUGIN_ID, iFrame: true }, error: null } as never,
+      { manifest: { id: pluginId, iFrame: true }, error: null } as never,
     ]);
     pluginService.getBaseCfg.and.resolveTo({} as never);
     pluginService.getPluginIframeGeneration.and.returnValue(0);
@@ -69,7 +69,7 @@ describe('PluginIndexComponent', () => {
     fixture = TestBed.createComponent(PluginIndexComponent);
     component = fixture.componentInstance;
     // The side-panel container drives the component via this input.
-    fixture.componentRef.setInput('directPluginId', PLUGIN_ID);
+    fixture.componentRef.setInput('directPluginId', pluginId);
     fixture.componentRef.setInput('showFullUI', false);
     fixture.componentRef.setInput('useSidePanelConfig', true);
     // contentWindow only exists for a connected iframe.
@@ -91,6 +91,39 @@ describe('PluginIndexComponent', () => {
     await setup();
     expect(getIframe()).toBeTruthy();
     expect(component.isLoading()).toBe(false);
+  });
+
+  it('sends presentation context on iframe load and updates without reloading', async () => {
+    await setup('personal-planner');
+    const frame = getIframe();
+    const send = spyOn(frame.contentWindow!, 'postMessage');
+    const document = component.iframeSrcdoc();
+    fixture.componentRef.setInput('presentationContext', {
+      type: 'personal-planner:navigate',
+      section: 'workflow',
+      projectId: 'alpha',
+      embedded: true,
+    });
+    component.onIframeLoad();
+    expect(send.calls.mostRecent().args as unknown[]).toEqual([
+      jasmine.objectContaining({ section: 'workflow', projectId: 'alpha' }),
+      '*',
+    ]);
+    fixture.componentRef.setInput('presentationContext', {
+      type: 'personal-planner:navigate',
+      section: 'week',
+      projectId: 'beta',
+      embedded: true,
+    });
+    expect(send.calls.mostRecent().args as unknown[]).toEqual([
+      jasmine.objectContaining({ section: 'week', projectId: 'beta' }),
+      '*',
+    ]);
+    expect(component.iframeSrcdoc()).toBe(document);
+    component.ngOnDestroy();
+    send.calls.reset();
+    component.onIframeLoad();
+    expect(send).not.toHaveBeenCalled();
   });
 
   // Enabling a plugin flips isEnabled before its assets are fetched; opening the
@@ -189,6 +222,63 @@ describe('PluginIndexComponent', () => {
       type: 'translate',
       payload: { key: 'HOME.TITLE' },
     });
+  });
+
+  it('validates scoped navigation requests and never accepts foreign windows', async () => {
+    await setup('personal-planner');
+    const navigate = spyOn(component.presentationNavigationRequest, 'emit');
+    const send = (data: unknown, source: Window = getIframe().contentWindow!): void => {
+      window.dispatchEvent(new MessageEvent('message', { source, data }));
+    };
+    send(
+      {
+        type: 'personal-planner:request-navigation',
+        section: 'workflow',
+        projectId: 'alpha',
+      },
+      window,
+    );
+    send({
+      type: 'personal-planner:request-navigation',
+      section: 'destroy',
+      projectId: 'alpha',
+    });
+    send({
+      type: 'personal-planner:request-navigation',
+      section: 'workflow',
+      projectId: {},
+    });
+    expect(navigate).not.toHaveBeenCalled();
+    send({
+      type: 'personal-planner:request-navigation',
+      section: 'integrations',
+      projectId: 'alpha',
+      taskId: 'task-a',
+    });
+    expect(navigate).toHaveBeenCalledOnceWith({
+      section: 'integrations',
+      projectId: 'alpha',
+      taskId: 'task-a',
+    });
+  });
+
+  it('accepts planner dirty state only from its own live iframe', async () => {
+    await setup('personal-planner');
+    const dirty = spyOn(component.plannerStateChange, 'emit');
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: window,
+        data: { type: 'personal-planner:state', dirty: true },
+      }),
+    );
+    expect(dirty).not.toHaveBeenCalled();
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: getIframe().contentWindow,
+        data: { type: 'personal-planner:state', dirty: true },
+      }),
+    );
+    expect(dirty).toHaveBeenCalledOnceWith({ dirty: true, workflowDirty: false });
   });
 
   it('ignores messages whose source is not this plugin iframe', async () => {

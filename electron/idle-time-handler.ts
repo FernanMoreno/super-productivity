@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { app, powerMonitor } from 'electron';
 import electronLog from 'electron-log/main';
 import { CONFIG } from './CONFIG';
+import { readWindowsHostIdleTime } from './wsl-idle-time';
 
 const execAsync = promisify(exec);
 const log = electronLog.scope('IdleTimeHandler');
@@ -16,6 +17,7 @@ const WAYLAND_IDLE_NOTIFY_RETRY_INTERVAL_MS = 60_000;
 const WAYLAND_IDLE_NOTIFY_DEMOTION_COOLDOWN_MS = 5 * 60_000;
 
 type IdleDetectionMethod =
+  | 'wslWindows'
   | 'powerMonitor'
   | 'gnomeDBus'
   | 'waylandIdleNotify'
@@ -24,6 +26,7 @@ type IdleDetectionMethod =
   | 'none';
 
 interface EnvironmentInfo {
+  readonly isWsl: boolean;
   readonly isWayland: boolean;
   readonly isGnomeWayland: boolean;
   readonly isSnap: boolean;
@@ -77,6 +80,9 @@ export class IdleTimeHandler {
     const isSnap = !!process.env.SNAP || !!process.env.SNAP_NAME;
 
     const environment: EnvironmentInfo = {
+      isWsl:
+        process.platform === 'linux' &&
+        !!(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP),
       isWayland,
       isGnomeWayland,
       isSnap,
@@ -109,6 +115,16 @@ export class IdleTimeHandler {
     this._maybePromoteToWaylandIdleNotify(methodUsed);
 
     switch (methodUsed) {
+      case 'wslWindows':
+        try {
+          return await readWindowsHostIdleTime();
+        } catch (error) {
+          // Keep this source selected so a transient interop failure can recover
+          // on the next poll. Never reuse an old host sample or VM idle time.
+          this._logError('Windows host idle read failed', error);
+          return 0;
+        }
+
       case 'powerMonitor':
         try {
           return powerMonitor.getSystemIdleTime() * 1000;
@@ -192,6 +208,7 @@ export class IdleTimeHandler {
     if (
       !this._environment.isWayland ||
       currentMethod === 'gnomeDBus' ||
+      currentMethod === 'wslWindows' ||
       currentMethod === 'waylandIdleNotify' ||
       this._waylandIdleNotifyPromotionPromise
     ) {
@@ -248,6 +265,11 @@ export class IdleTimeHandler {
 
   private async _determineWorkingMethod(): Promise<IdleDetectionMethod> {
     log.debug('Determining idle detection method...');
+
+    if (this._environment.isWsl) {
+      log.info('Using Windows host input for WSL idle detection');
+      return 'wslWindows';
+    }
 
     if (!this._environment.isWayland) {
       log.debug('Using powerMonitor for non-Wayland session');
@@ -552,9 +574,22 @@ export class IdleTimeHandler {
   }
 
   private async _getLoginctlIdleTime(): Promise<number | null> {
-    const { stdout } = await execAsync('loginctl show-session -p IdleSinceHint', {
-      timeout: 3000,
-    });
+    // Without a session ID loginctl can return the manager's aggregate idle
+    // timestamp (e.g. days old under WSLg), unrelated to desktop input.
+    const { stdout } = await execAsync(
+      'loginctl show-session self -p Type -p IdleHint -p IdleSinceHint',
+      { timeout: 3000 },
+    );
+
+    if (!/^Type=(x11|wayland)$/m.test(stdout)) {
+      return null;
+    }
+    if (/^IdleHint=no$/m.test(stdout)) {
+      return 0;
+    }
+    if (!/^IdleHint=yes$/m.test(stdout)) {
+      return null;
+    }
 
     const match = stdout.match(/IdleSinceHint=(\d+)/);
     if (match && match[1]) {

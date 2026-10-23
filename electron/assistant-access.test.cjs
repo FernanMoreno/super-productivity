@@ -206,6 +206,9 @@ test('only granted tools are listed', () => {
     'get_task',
     'list_projects',
     'list_tags',
+    'task_timer',
+    'task_notes',
+    'control_operation_status',
   ]);
   for (const tool of tools.listGrantedTools([...READ, 'tasks:capture'])) {
     assert.equal(tool.inputSchema.type, 'object');
