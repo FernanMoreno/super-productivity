@@ -1,4 +1,14 @@
 import { AssistantAccessScope } from './assistant-access.model';
+import {
+  REPEAT_PROPERTIES,
+  repeatWritesNotes,
+  validateRepeatAdvanced,
+} from './assistant-repeat-control.model';
+import {
+  TASK_CONTROL_CONTRACTS,
+  validateTaskControlArgs,
+  taskControlExtraScopes,
+} from './assistant-task-control.contract';
 
 export const ASSISTANT_CONTROL_PATH = '/assistant/control';
 export interface AssistantControlContext {
@@ -66,6 +76,8 @@ const operation = {
 const text = { type: 'string', maxLength: 500 };
 const notes = { type: 'string', maxLength: 8192 };
 const duration = { type: 'integer', minimum: 0, maximum: 86400000 };
+const repeatCycles = ['daily', 'weekly', 'monthly', 'yearly'];
+export const CONTROL_REPEAT_WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const fields = {
   type: 'object',
   properties: {
@@ -84,6 +96,31 @@ export interface ControlContract {
   description: string;
 }
 export const CONTROL_CONTRACTS: Record<string, ControlContract> = {
+  ...TASK_CONTROL_CONTRACTS,
+  task_repeat: {
+    commands: ['read', 'read_template', 'set', 'remove'],
+    properties: {
+      taskId: id,
+      ...REPEAT_PROPERTIES,
+      cycle: { type: 'string', enum: repeatCycles },
+      every: { type: 'integer', minimum: 1, maximum: 99, default: 1 },
+      weekdays: {
+        type: 'array',
+        items: { type: 'string', enum: CONTROL_REPEAT_WEEKDAYS },
+        minItems: 1,
+        maxItems: 7,
+        uniqueItems: true,
+      },
+      startDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      expectedRevision: {
+        anyOf: [{ type: 'string', maxLength: 4096 }, { type: 'null' }],
+      },
+    },
+    baseScopes: ['tasks:read'],
+    writeScopes: ['tasks:write'],
+    description:
+      'Read/set/remove the native repeating series of a top-level task. Set requires startDay, cycle, expectedRevision from read (null for no series), operationId. every defaults to 1; weekdays is weekly only. Optional advanced fields preserve when omitted; null clears optional values. repeatUntilDay is inclusive. template edits affect future occurrences; notes and subtask template replacement require write_notes. read_template requires read_notes; read omits all notes. Time/reminder edits default to future occurrences; applyTo current also changes the selected unfinished instance, preserving its day and estimate. Calendar changes retain native rescheduling behavior. remove requires revision and removes recurrence without deleting tasks. Read again after writing.',
+  },
   task_timer: {
     commands: ['status', 'start', 'pause', 'stop'],
     properties: { taskId: id, expectedCurrentTaskId: { anyOf: [id, { type: 'null' }] } },
@@ -180,7 +217,7 @@ export const CONTROL_CONTRACTS: Record<string, ControlContract> = {
 };
 export const isControlMutation = (tool: string, args: Record<string, unknown>): boolean =>
   tool !== 'control_operation_status' &&
-  !['status', 'read'].includes(String(args['command']));
+  !['status', 'read', 'read_template'].includes(String(args['command']));
 export const controlScopes = (
   tool: string,
   args: Record<string, unknown>,
@@ -189,9 +226,16 @@ export const controlScopes = (
   if (!contract) return [];
   return [
     ...contract.baseScopes,
+    ...taskControlExtraScopes(tool, args),
     ...(isControlMutation(tool, args) ? contract.writeScopes : []),
     ...(tool === 'task_notes' && args['command'] === 'read'
       ? ['tasks:read_notes' as const]
+      : []),
+    ...(tool === 'task_repeat' && args['command'] === 'read_template'
+      ? ['tasks:read_notes' as const]
+      : []),
+    ...(tool === 'task_repeat' && args['command'] === 'set' && repeatWritesNotes(args)
+      ? ['tasks:write_notes' as const]
       : []),
     ...(tool === 'idle_review' && args['command'] === 'track_task'
       ? ['tasks:read' as const]
@@ -222,6 +266,8 @@ export const validateControlArgs = (
   } else if (has(args, 'operationId')) return 'Read commands do not accept operationId';
   for (const key of ['taskId', 'id', 'reviewId'])
     if (has(args, key) && !validId(args[key])) return 'Invalid id';
+  if (Object.hasOwn(TASK_CONTROL_CONTRACTS, tool))
+    return validateTaskControlArgs(tool, args);
   if (
     has(args, 'expectedCurrentTaskId') &&
     args['expectedCurrentTaskId'] !== null &&
@@ -247,6 +293,51 @@ export const validateControlArgs = (
       return 'Only start requires taskId';
     if (command === 'status' && has(args, 'expectedCurrentTaskId'))
       return 'Status accepts no expectation';
+  }
+  if (tool === 'task_repeat') {
+    if (!validId(args['taskId'])) return 'A taskId is required';
+    if (command === 'read' || command === 'read_template') {
+      if (Object.keys(args).some((key) => !['command', 'taskId'].includes(key)))
+        return 'Read accepts only taskId';
+    } else if (command === 'remove') {
+      if (
+        typeof args['expectedRevision'] !== 'string' ||
+        !args['expectedRevision'] ||
+        args['expectedRevision'].length > 4096 ||
+        Object.keys(args).some(
+          (key) =>
+            !['command', 'taskId', 'expectedRevision', 'operationId'].includes(key),
+        )
+      )
+        return 'Remove requires the existing revision only';
+    } else {
+      const day = args['startDay'];
+      const weekdays = args['weekdays'];
+      if (
+        !repeatCycles.includes(String(args['cycle'])) ||
+        (has(args, 'every') &&
+          (!Number.isInteger(args['every']) ||
+            (args['every'] as number) < 1 ||
+            (args['every'] as number) > 99)) ||
+        typeof day !== 'string' ||
+        !/^[1-9]\d{3}-\d{2}-\d{2}$/.test(day) ||
+        !Number.isFinite(Date.parse(day + 'T12:00:00Z')) ||
+        new Date(day + 'T12:00:00Z').toISOString().slice(0, 10) !== day ||
+        (args['expectedRevision'] !== null &&
+          (typeof args['expectedRevision'] !== 'string' ||
+            args['expectedRevision'].length > 4096)) ||
+        (has(args, 'weekdays') &&
+          (args['cycle'] !== 'weekly' ||
+            !Array.isArray(weekdays) ||
+            !weekdays.length ||
+            weekdays.length > 7 ||
+            new Set(weekdays).size !== weekdays.length ||
+            !weekdays.every((v) => CONTROL_REPEAT_WEEKDAYS.includes(v))))
+      )
+        return 'A valid cycle, interval, startDay, revision and weekly weekdays are required';
+      const invalid = validateRepeatAdvanced(args);
+      if (invalid) return invalid;
+    }
   }
   if (tool === 'task_time') {
     const day = args['date'];

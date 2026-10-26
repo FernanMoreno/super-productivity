@@ -23,6 +23,8 @@ import {
   flushPluginWrites,
 } from '../../plugins/plugin-persistence-api';
 import { AssistantNativeControlService } from './assistant-native-control.service';
+import { AssistantTaskControlService } from './assistant-task-control.service';
+import { TASK_CONTROL_CONTRACTS } from '../../../../electron/shared-with-frontend/assistant-task-control.contract';
 import { AssistantSystemControlService } from './assistant-system-control.service';
 import { ControlOperationJournal } from './control-operation-journal';
 
@@ -32,6 +34,7 @@ const native = new Set([
   'task_timer',
   'task_time',
   'task_notes',
+  'task_repeat',
   'project_manage',
   'tag_manage',
 ]);
@@ -119,9 +122,11 @@ export class LocalRestApiControlRoutesService implements LocalRestApiFeatureRout
           await this._journal.status(args['operationId'] as string, granted),
         );
       }
-      const service = native.has(tool)
-        ? this._injector.get(AssistantNativeControlService)
-        : this._injector.get(AssistantSystemControlService);
+      const service = Object.hasOwn(TASK_CONTROL_CONTRACTS, tool)
+        ? this._injector.get(AssistantTaskControlService)
+        : native.has(tool)
+          ? this._injector.get(AssistantNativeControlService)
+          : this._injector.get(AssistantSystemControlService);
       if (!isControlMutation(tool, args)) {
         const result = await service.run(tool, args, {
           authorize,

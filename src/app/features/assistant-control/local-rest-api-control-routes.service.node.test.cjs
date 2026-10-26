@@ -43,7 +43,12 @@ const harness = () => {
       return serviceRun(...args);
     },
   };
-  const injector = { get: () => native };
+  const injector = {
+    get: (token) => {
+      state.selectedService = token;
+      return native;
+    },
+  };
   const hydration = { isInSyncWindow: () => state.syncing };
   const framework = {
     '@angular/core': {
@@ -72,6 +77,8 @@ const harness = () => {
         return { AssistantNativeControlService: 'Native' };
       if (name.endsWith('assistant-system-control.service'))
         return { AssistantSystemControlService: 'System' };
+      if (name.endsWith('assistant-task-control.service'))
+        return { AssistantTaskControlService: 'TaskControl' };
       if (name.endsWith('plugin-persistence-api'))
         return {
           assertPluginWritesHealthy: () => {
@@ -84,6 +91,8 @@ const harness = () => {
         };
       if (
         name.endsWith('assistant-control.model') ||
+        name.endsWith('assistant-repeat-control.model') ||
+        name.endsWith('assistant-task-control.contract') ||
         name.endsWith('control-operation-journal') ||
         name.endsWith('local-rest-api-response')
       ) {
@@ -168,6 +177,34 @@ test('only authenticated MCP POST source reaches the control route', async () =>
     assert.equal(await h.route.handle({ ...h.write(), ...changes }), undefined);
   }
   assert.equal(h.state.calls, 0);
+});
+
+test('task controls use their native owner and retain the shared receipt and grant fences', async () => {
+  const h = harness();
+  h.state.scopes.push('tasks:write');
+  const read = h.request('task_manage', { command: 'read', taskId: 'task' });
+  h.setRun(async (_tool, _args) => ({ taskId: 'task', revision: 'revision' }));
+  assert.equal((await h.route.handle(read)).status, 200);
+  assert.equal(h.state.selectedService, 'TaskControl');
+  assert.equal(h.state.flushes, 0);
+  h.setRun(async (_tool, _args, context) => {
+    await context.authorize();
+    context.markMutation();
+    h.state.writes++;
+    return { taskId: 'task' };
+  });
+  const write = h.request('task_manage', {
+    command: 'complete',
+    taskId: 'task',
+    expectedRevision: 'revision',
+    operationId: 'task-control-operation',
+  });
+  assert.equal((await h.route.handle(write)).status, 200);
+  assert.equal((await h.route.handle(write)).status, 200);
+  assert.equal(h.state.writes, 1);
+  assert.equal(h.state.flushes, 1);
+  h.state.scopes = ['tasks:read'];
+  assert.equal((await h.route.handle(write)).status, 403);
 });
 
 test('unknown body fields and schema-inconsistent arguments reject before dispatch', async () => {

@@ -61,6 +61,61 @@ const testCase = (
 };
 
 describe('getNextRepeatOccurrence()', () => {
+  it('starts scanning at a distant future beginning instead of exhausting the search window', () => {
+    for (const repeatCycle of ['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'] as const) {
+      const cfg = dummyRepeatable('distant-start', {
+        repeatCycle,
+        repeatEvery: 1,
+        startDate: '2099-11-30',
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true,
+      });
+      for (const inclusive of [true, false]) {
+        expect(getNextRepeatOccurrence(cfg, new Date(2026, 9, 23), { inclusive }))
+          .withContext(`${repeatCycle}, inclusive=${inclusive}`)
+          .toEqual(new Date(2099, 10, 30, 12));
+      }
+    }
+  });
+
+  it('finds the next occurrence for supported long monthly and yearly intervals', () => {
+    for (const repeatCycle of ['MONTHLY', 'YEARLY'] as const) {
+      const cfg = dummyRepeatable('long-interval', {
+        repeatCycle,
+        repeatEvery: 99,
+        startDate: '2026-01-10',
+        lastTaskCreationDay: '2026-01-10',
+      });
+      expect(
+        getNextRepeatOccurrence(cfg, new Date(2026, 0, 11), { inclusive: true }),
+      ).toEqual(
+        repeatCycle === 'MONTHLY' ? new Date(2034, 3, 10, 12) : new Date(2125, 0, 10, 12),
+      );
+    }
+  });
+
+  it('keeps searches bounded for excessively large imported intervals', () => {
+    for (const repeatCycle of ['MONTHLY', 'YEARLY'] as const) {
+      expect(
+        getNextRepeatOccurrence(
+          dummyRepeatable('large-interval', {
+            repeatCycle,
+            repeatEvery: Number.MAX_SAFE_INTEGER,
+            startDate: '2026-01-10',
+            lastTaskCreationDay: '2026-01-10',
+          }),
+          new Date(2026, 0, 11),
+          { inclusive: true },
+        ),
+      ).toBeNull();
+    }
+  });
+
   describe('Input validation', () => {
     it('should use fallback date (1970-01-01) when startDate is not defined', () => {
       const cfg = dummyRepeatable('ID1', {

@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
+require('ts-node').register({ transpileOnly: true, preferTsExts: true });
 
-const createHarness = () => {
+const createHarness = (startOfNextDayDiffMs = 0) => {
   const calls = [];
   const state = {
     currentTaskId: null,
@@ -14,6 +15,9 @@ const createHarness = () => {
         title: 'Task',
         notes: 'old',
         subTaskIds: [],
+        tagIds: ['TODAY', 'tag'],
+        projectId: 'project',
+        timeEstimate: 600000,
         timeSpentOnDay: { '2026-10-20': 1000 },
       },
     },
@@ -22,6 +26,23 @@ const createHarness = () => {
     { id: 'project', title: 'Project', theme: { primary: '#fff' }, isArchived: false },
   ];
   const tags = [{ id: 'tag', title: 'Tag', color: '#fff' }];
+  const repeats = { entities: {} };
+  const repeatService = {
+    deleteTaskRepeatCfg: (id) => {
+      calls.push(['repeatDelete', id]);
+      delete repeats.entities[id];
+    },
+    addTaskRepeatCfgToTask: (taskId, projectId, cfg) => {
+      calls.push(['repeatAdd', taskId, projectId, cfg]);
+      repeats.entities.repeat = { ...cfg, projectId, id: 'repeat' };
+      state.entities[taskId] = { ...state.entities[taskId], repeatCfgId: 'repeat' };
+      return 'repeat';
+    },
+    updateTaskRepeatCfg: (id, changes) => {
+      calls.push(['repeatUpdate', id, changes]);
+      repeats.entities[id] = { ...repeats.entities[id], ...changes };
+    },
+  };
   const methods = (names) =>
     Object.fromEntries(
       names.map((name) => [
@@ -40,6 +61,7 @@ const createHarness = () => {
     'pauseCurrent',
     'addTimeSpentAndSync',
     'update',
+    'reScheduleTask',
   ]);
   taskService.isTimeTrackingEnabled = () => true;
   const projectService = {
@@ -55,12 +77,18 @@ const createHarness = () => {
     TaskService: taskService,
     ProjectService: projectService,
     TagService: tagService,
-    DateService: { todayStr: () => '2026-10-22' },
+    TaskRepeatCfgService: repeatService,
+    DateService: {
+      todayStr: () => '2026-10-22',
+      getStartOfNextDayDiffMs: () => startOfNextDayDiffMs,
+    },
     Store: {
       selectSignal: (selector) => () =>
-        selector === 'projects'
-          ? { entities: Object.fromEntries(projects.map((p) => [p.id, p])) }
-          : state,
+        selector === 'repeats'
+          ? repeats
+          : selector === 'projects'
+            ? { entities: Object.fromEntries(projects.map((p) => [p.id, p])) }
+            : state,
       dispatch: (action) => calls.push(['dispatch', action]),
     },
   };
@@ -85,10 +113,36 @@ const createHarness = () => {
       return { Injectable: () => (type) => type, inject: (token) => mocks[token] };
     if (path === '@ngrx/store') return { Store: 'Store' };
     if (path === 'rxjs') return { firstValueFrom: async (value) => value };
-    if (path.endsWith('assistant-control.model')) return { ControlError };
+    if (path.endsWith('assistant-control.model'))
+      return {
+        ...require('../../../../electron/shared-with-frontend/assistant-control.model.ts'),
+        ControlError,
+      };
+    if (path.endsWith('date-str-to-utc-date'))
+      return { dateStrToUtcDate: (day) => new Date(day + 'T12:00:00') };
+    if (path.endsWith('task-repeat-cfg.service'))
+      return { TaskRepeatCfgService: 'TaskRepeatCfgService' };
+    if (path.endsWith('task-repeat-cfg.selectors'))
+      return { selectTaskRepeatCfgFeatureState: 'repeats' };
+    if (
+      [
+        'task-repeat-cfg.model',
+        'get-interval-repeat-updates',
+        'get-default-skip-overdue',
+        'remind-option-to-milliseconds',
+        'task.model',
+        'get-db-date-str',
+        'get-repeat-due-with-time.util',
+      ].some((suffix) => path.endsWith(suffix))
+    )
+      return require(require('node:path').resolve(__dirname, path));
     if (path.endsWith('task.selectors')) return { selectTaskFeatureState: () => state };
     if (path.endsWith('project.actions'))
       return { archiveProject: (value) => ({ type: 'archive', ...value }) };
+    if (path.endsWith('planner.actions'))
+      return {
+        PlannerActions: { planTaskForDay: (value) => ({ type: 'planDay', ...value }) },
+      };
     if (path.endsWith('project.selectors'))
       return { selectProjectFeatureState: 'projects' };
     if (path.endsWith('project.const'))
@@ -122,7 +176,16 @@ const createHarness = () => {
   };
   vm.runInNewContext(
     compiled,
-    { exports, require: requireStub, Object, Set, Number, Error },
+    {
+      exports,
+      require: requireStub,
+      Object,
+      Set,
+      Number,
+      Error,
+      crypto: require('node:crypto').webcrypto,
+      TextEncoder,
+    },
     { filename },
   );
   const service = new exports.AssistantNativeControlService();
@@ -130,8 +193,354 @@ const createHarness = () => {
     authorize: async () => calls.push(['authorize']),
     markMutation: () => calls.push(['mark']),
   };
-  return { service, context, calls, state, projects, tags, taskService };
+  return { service, context, calls, state, projects, tags, taskService, repeats };
 };
+
+const repeatArgs = {
+  command: 'set',
+  taskId: 'task',
+  cycle: 'weekly',
+  every: 2,
+  weekdays: ['wed', 'fri'],
+  startDay: '2026-10-28',
+  expectedRevision: null,
+  operationId: 'repeat-test-operation',
+};
+test('repeat creation cannot rewrite a completed task history', async () => {
+  const h = createHarness();
+  h.state.entities.task.isDone = true;
+  const before = JSON.stringify(h.state);
+  await assert.rejects(h.service.run('task_repeat', repeatArgs, h.context), {
+    code: 'INVALID_ARGUMENTS',
+  });
+  assert.equal(JSON.stringify(h.state), before);
+  assert.equal(h.calls.length, 0);
+});
+test('repeat creates and edits one native series while preserving task and advanced metadata', async () => {
+  const h = createHarness();
+  assert.equal(
+    (await h.service.run('task_repeat', { command: 'read', taskId: 'task' }, h.context))
+      .revision,
+    null,
+  );
+  await h.service.run('task_repeat', repeatArgs, h.context);
+  const cfg = h.repeats.entities.repeat;
+  assert.equal(cfg.repeatEvery, 2);
+  assert.equal(cfg.wednesday, true);
+  assert.equal(cfg.friday, true);
+  assert.equal(cfg.monday, false);
+  assert.equal(cfg.startDate, '2026-10-28');
+  assert.deepEqual(Array.from(cfg.tagIds), ['tag']);
+  assert.equal(cfg.notes, 'old');
+  assert.equal(cfg.defaultEstimate, 600000);
+  cfg.waitForCompletion = true;
+  cfg.repeatUntilDay = '2027-12-31';
+  cfg.startTime = '16:00';
+  cfg.remindAt = 'm10';
+  const read = await h.service.run(
+    'task_repeat',
+    { command: 'read', taskId: 'task' },
+    h.context,
+  );
+  assert(!JSON.stringify(read).includes('old'));
+  const { weekdays, ...monthlyArgs } = repeatArgs;
+  await h.service.run(
+    'task_repeat',
+    {
+      ...monthlyArgs,
+      cycle: 'monthly',
+      startDay: '2026-11-30',
+      expectedRevision: read.revision,
+    },
+    h.context,
+  );
+  assert.equal(h.calls.filter((c) => c[0] === 'repeatAdd').length, 1);
+  assert.equal(h.repeats.entities.repeat.repeatCycle, 'MONTHLY');
+  for (const key of [
+    'notes',
+    'defaultEstimate',
+    'waitForCompletion',
+    'repeatUntilDay',
+    'startTime',
+    'remindAt',
+  ])
+    assert.equal(h.repeats.entities.repeat[key], cfg[key]);
+  assert.equal(h.state.entities.task.timeSpentOnDay['2026-10-20'], 1000);
+});
+
+test('repeat rejects stale revisions, UI races, subtasks and missing series without mutation', async () => {
+  const h = createHarness();
+  await h.service.run('task_repeat', repeatArgs, h.context);
+  await assert.rejects(h.service.run('task_repeat', repeatArgs, h.context), {
+    code: 'STALE_DATA',
+  });
+  const read = await h.service.run(
+    'task_repeat',
+    { command: 'read', taskId: 'task' },
+    h.context,
+  );
+  h.context.authorize = async () => {
+    h.repeats.entities.repeat = { ...h.repeats.entities.repeat, repeatEvery: 3 };
+  };
+  await assert.rejects(
+    h.service.run(
+      'task_repeat',
+      { ...repeatArgs, expectedRevision: read.revision },
+      h.context,
+    ),
+    { code: 'STALE_DATA' },
+  );
+  h.state.entities.task.parentId = 'parent';
+  await assert.rejects(h.service.run('task_repeat', repeatArgs, h.context), {
+    code: 'INVALID_ARGUMENTS',
+  });
+  delete h.state.entities.task.parentId;
+  delete h.repeats.entities.repeat;
+  await assert.rejects(h.service.run('task_repeat', repeatArgs, h.context), {
+    code: 'DATA_UNAVAILABLE',
+  });
+  assert.equal(h.calls.filter((c) => c[0] === 'mark').length, 1);
+});
+
+test('repeat safe template read, time edits, explicit clear and removal preserve history', async () => {
+  const h = createHarness();
+  await h.service.run('task_repeat', repeatArgs, h.context);
+  const read = () =>
+    h.service.run('task_repeat', { command: 'read', taskId: 'task' }, h.context);
+  const first = await read();
+  assert.equal(first.template.title, 'Task');
+  assert(!JSON.stringify(first).includes('old'));
+  const edit = {
+    ...repeatArgs,
+    expectedRevision: first.revision,
+    startTime: '12:00',
+    reminder: 'm10',
+    repeatUntilDay: '2026-12-16',
+    paused: true,
+    template: { title: 'Course', notes: 'private' },
+  };
+  await h.service.run('task_repeat', edit, h.context);
+  assert.equal(h.repeats.entities.repeat.startTime, '12:00');
+  assert.equal(h.repeats.entities.repeat.remindAt, 'm10');
+  assert.equal(h.repeats.entities.repeat.isPaused, true);
+  const second = await read();
+  assert(!JSON.stringify(second).includes('private'));
+  assert.equal(
+    (
+      await h.service.run(
+        'task_repeat',
+        { command: 'read_template', taskId: 'task' },
+        h.context,
+      )
+    ).template.notes,
+    'private',
+  );
+  h.repeats.entities.repeat = { ...h.repeats.entities.repeat, notes: 'raced' };
+  await assert.rejects(
+    h.service.run(
+      'task_repeat',
+      { ...edit, expectedRevision: second.revision },
+      h.context,
+    ),
+    { code: 'STALE_DATA' },
+  );
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: null,
+      reminder: null,
+      repeatUntilDay: null,
+    },
+    h.context,
+  );
+  assert.equal(h.repeats.entities.repeat.startTime, undefined);
+  assert.equal(h.repeats.entities.repeat.repeatUntilDay, undefined);
+  await h.service.run(
+    'task_repeat',
+    {
+      command: 'remove',
+      taskId: 'task',
+      expectedRevision: (await read()).revision,
+      operationId: 'remove-repeat',
+    },
+    h.context,
+  );
+  assert(h.calls.some((c) => c[0] === 'repeatDelete'));
+  assert.equal(h.state.entities.task.timeSpentOnDay['2026-10-20'], 1000);
+});
+
+test('repeat current time edits keep the selected calendar day and estimates; default edits are future only', async () => {
+  const h = createHarness();
+  h.state.entities.task.dueDay = '2026-10-28';
+  await h.service.run('task_repeat', repeatArgs, h.context);
+  const read = () =>
+    h.service.run('task_repeat', { command: 'read', taskId: 'task' }, h.context);
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: '12:00',
+      reminder: 'm10',
+    },
+    h.context,
+  );
+  assert(!h.calls.some((c) => c[0] === 'reScheduleTask'));
+  const update = h.calls.filter((c) => c[0] === 'repeatUpdate').at(-1)[2];
+  assert(!('startDate' in update));
+  assert(!('repeatCycle' in update));
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: '13:00',
+      reminder: null,
+      applyTo: 'current',
+    },
+    h.context,
+  );
+  const scheduled = h.calls.find((c) => c[0] === 'reScheduleTask')[1];
+  assert.equal(new Date(scheduled.due).getDate(), 28);
+  assert.equal(new Date(scheduled.due).getHours(), 13);
+  assert.equal(scheduled.remindCfg, 'DoNotRemind');
+  assert.equal(scheduled.task.timeEstimate, 600000);
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: null,
+      applyTo: 'current',
+    },
+    h.context,
+  );
+  assert.equal(
+    h.calls.find((c) => c[0] === 'dispatch' && c[1].type === 'planDay')[1].day,
+    '2026-10-28',
+  );
+});
+
+test('repeat current time changes preserve the logical day across a custom 04:00 boundary', async () => {
+  const h = createHarness(4 * 60 * 60 * 1000);
+  h.state.entities.task.dueDay = '2026-10-28';
+  await h.service.run('task_repeat', repeatArgs, h.context);
+  const read = () =>
+    h.service.run('task_repeat', { command: 'read', taskId: 'task' }, h.context);
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: '02:00',
+      applyTo: 'current',
+    },
+    h.context,
+  );
+  const scheduled = h.calls.find((c) => c[0] === 'reScheduleTask')[1];
+  assert.equal(new Date(scheduled.due).getDate(), 29);
+  assert.equal(new Date(scheduled.due).getHours(), 2);
+  h.state.entities.task = {
+    ...h.state.entities.task,
+    dueDay: undefined,
+    dueWithTime: scheduled.due,
+  };
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: '03:00',
+      applyTo: 'current',
+    },
+    h.context,
+  );
+  const rescheduled = h.calls.filter((c) => c[0] === 'reScheduleTask').at(-1)[1];
+  assert.equal(new Date(rescheduled.due).getDate(), 29);
+  assert.equal(new Date(rescheduled.due).getHours(), 3);
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: (await read()).revision,
+      startTime: null,
+      applyTo: 'current',
+    },
+    h.context,
+  );
+  assert.equal(
+    h.calls.find((c) => c[0] === 'dispatch' && c[1].type === 'planDay')[1].day,
+    '2026-10-28',
+  );
+});
+
+test('clearing repeat current time restores the logical day of a late-night timestamp', async () => {
+  const h = createHarness(4 * 60 * 60 * 1000);
+  h.state.entities.task.dueWithTime = new Date('2026-10-29T02:00:00').getTime();
+  await h.service.run('task_repeat', repeatArgs, h.context);
+  const read = await h.service.run(
+    'task_repeat',
+    { command: 'read', taskId: 'task' },
+    h.context,
+  );
+  await h.service.run(
+    'task_repeat',
+    {
+      ...repeatArgs,
+      expectedRevision: read.revision,
+      startTime: null,
+      applyTo: 'current',
+    },
+    h.context,
+  );
+  assert.equal(
+    h.calls.find((c) => c[0] === 'dispatch' && c[1].type === 'planDay')[1].day,
+    '2026-10-28',
+  );
+});
+
+test('repeat monthly anchors preserve when omitted and referenced tags recheck after authorization', async () => {
+  const h = createHarness();
+  const { weekdays, ...args } = repeatArgs;
+  await h.service.run(
+    'task_repeat',
+    { ...args, cycle: 'monthly', monthlyWeekOfMonth: -1, monthlyWeekday: 1 },
+    h.context,
+  );
+  const read = () =>
+    h.service.run('task_repeat', { command: 'read', taskId: 'task' }, h.context);
+  await h.service.run(
+    'task_repeat',
+    {
+      ...args,
+      cycle: 'monthly',
+      expectedRevision: (await read()).revision,
+      skipOverdue: true,
+    },
+    h.context,
+  );
+  assert.equal(h.repeats.entities.repeat.monthlyWeekOfMonth, -1);
+  assert.equal(h.repeats.entities.repeat.monthlyWeekday, 1);
+  const revision = (await read()).revision;
+  const marks = h.calls.filter((c) => c[0] === 'mark').length;
+  h.context.authorize = async () => h.tags.splice(0);
+  await assert.rejects(
+    h.service.run(
+      'task_repeat',
+      {
+        ...args,
+        cycle: 'monthly',
+        expectedRevision: revision,
+        template: { tagIds: ['tag'] },
+      },
+      h.context,
+    ),
+    { code: 'INVALID_ARGUMENTS' },
+  );
+  assert.equal(h.calls.filter((c) => c[0] === 'mark').length, marks);
+});
 
 test('timer status reads current state without mutating', async () => {
   const h = createHarness();

@@ -16,6 +16,7 @@ test('control discovery includes all requested capability families', () => {
     'task_timer',
     'task_time',
     'task_notes',
+    'task_repeat',
     'project_manage',
     'tag_manage',
     'idle_review',
@@ -26,6 +27,133 @@ test('control discovery includes all requested capability families', () => {
   ])
     assert(tool(name), name);
 });
+
+test('repeat set validates calendar schedules and requires a read revision', async () => {
+  const valid = {
+    command: 'set',
+    taskId: 'task-1',
+    cycle: 'weekly',
+    every: 2,
+    weekdays: ['wed', 'fri'],
+    startDay: '2026-10-28',
+    expectedRevision: null,
+    operationId: 'repeat-operation-1',
+  };
+  for (const patch of [
+    { startDay: '2026-02-30' },
+    { startDay: '0001-01-01' },
+    { every: 0 },
+    { every: 100 },
+    { weekdays: [] },
+    { weekdays: ['wed', 'wed'] },
+    { weekdays: ['bad'] },
+    { cycle: 'daily' },
+    { cycle: 'Weekly' },
+    { expectedRevision: undefined },
+    { extra: true },
+  ]) {
+    const result = await tool('task_repeat').run(
+      { ...valid, ...patch },
+      grants(),
+      () => {
+        throw Error('invalid schedule forwarded');
+      },
+      grants,
+    );
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /INVALID_ARGUMENTS/);
+  }
+  const result = await tool('task_repeat').run(valid, grants(), reply, grants);
+  assert.equal(result.isError, undefined);
+  const denied = await tool('task_repeat').run(
+    valid,
+    ['tasks:read'],
+    () => {
+      throw Error('denied schedule forwarded');
+    },
+    () => ['tasks:read'],
+  );
+  assert.match(denied.content[0].text, /NOT_PERMITTED/);
+  for (const cycle of ['daily', 'monthly', 'yearly']) {
+    const { weekdays, ...args } = valid;
+    assert.equal(
+      (await tool('task_repeat').run({ ...args, cycle }, grants(), reply, grants))
+        .isError,
+      undefined,
+    );
+  }
+});
+test('repeat advanced fields, template notes scopes and removal are strict', async () => {
+  const {
+    validateControlArgs,
+    controlScopes,
+    isControlMutation,
+  } = require('../shared-with-frontend/assistant-control.model.ts');
+  const args = {
+    command: 'set',
+    taskId: 'task',
+    cycle: 'monthly',
+    startDay: '2026-11-01',
+    expectedRevision: null,
+    operationId: 'repeat-advanced',
+    startTime: '12:00',
+    reminder: 'DoNotRemind',
+    repeatUntilDay: '2026-12-16',
+    monthlyWeekOfMonth: -1,
+    monthlyWeekday: 1,
+    paused: false,
+    template: {
+      title: 'Course',
+      notes: 'secret',
+      subTaskTemplates: [{ title: 'Lesson', notes: 'private' }],
+    },
+  };
+  assert.equal(validateControlArgs('task_repeat', args), undefined);
+  assert(controlScopes('task_repeat', args).includes('tasks:write_notes'));
+  assert(
+    controlScopes('task_repeat', { command: 'read_template', taskId: 'task' }).includes(
+      'tasks:read_notes',
+    ),
+  );
+  assert.equal(isControlMutation('task_repeat', { command: 'read_template' }), false);
+  for (const patch of [
+    { startTime: '24:00' },
+    { reminder: 'bad' },
+    { repeatUntilDay: '2026-02-30' },
+    { repeatUntilDay: '2026-01-01' },
+    { monthlyWeekOfMonth: 5 },
+    { monthlyLastDay: true },
+    { paused: 1 },
+    { deletedInstanceDates: ['bad'] },
+    { template: { hidden: 1 } },
+    { template: { subTaskTemplates: [{ title: 'x', hidden: 1 }] } },
+  ])
+    assert(
+      validateControlArgs('task_repeat', { ...args, ...patch }),
+      JSON.stringify(patch),
+    );
+  assert.equal(
+    validateControlArgs('task_repeat', {
+      command: 'remove',
+      taskId: 'task',
+      expectedRevision: 'digest',
+      operationId: 'repeat-remove',
+    }),
+    undefined,
+  );
+  for (const protectedArgs of [args, { command: 'read_template', taskId: 'task' }]) {
+    const result = await tool('task_repeat').run(
+      protectedArgs,
+      ['tasks:read', 'tasks:write'],
+      () => {
+        throw Error('notes boundary forwarded');
+      },
+      () => ['tasks:read', 'tasks:write'],
+    );
+    assert.match(result.content[0].text, /NOT_PERMITTED/);
+  }
+});
+
 test('timer writes require independent grant and never forward on denial', async () => {
   let calls = 0;
   const r = await tool('task_timer').run(

@@ -76,6 +76,9 @@ const getNextRepeatOccurrenceIgnoringEnd = (
     checkDate.setDate(checkDate.getDate() + 1);
   }
 
+  // Do not exhaust the bounded scan on days before the series can begin.
+  if (checkDate < startDateDate) checkDate.setTime(startDateDate.getTime());
+
   switch (taskRepeatCfg.repeatCycle) {
     case 'DAILY': {
       const maxDaysToCheck = 365 * 2; // reasonable limit
@@ -114,7 +117,7 @@ const getNextRepeatOccurrenceIgnoringEnd = (
     }
 
     case 'MONTHLY': {
-      const maxMonthsToCheck = 24; // 2 years
+      const maxMonthsToCheck = Math.max(24, Math.min(100, taskRepeatCfg.repeatEvery + 1));
 
       if (hasNthWeekdayAnchor(taskRepeatCfg)) {
         return findMonthlyNthWeekdayOccurrence(taskRepeatCfg, checkDate, {
@@ -177,7 +180,7 @@ const getNextRepeatOccurrenceIgnoringEnd = (
     }
 
     case 'YEARLY': {
-      const maxYearsToCheck = 10;
+      const maxYearsToCheck = Math.max(10, Math.min(100, taskRepeatCfg.repeatEvery + 1));
       const dayOfMonthRepeat = startDateDate.getDate();
       const monthOfMonthRepeat = startDateDate.getMonth();
 

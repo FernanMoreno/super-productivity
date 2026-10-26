@@ -170,6 +170,10 @@ async function stdioDiscovery() {
       'task_timer',
       'task_time',
       'task_notes',
+      'task_repeat',
+      'task_manage',
+      'task_structure',
+      'task_attachment',
       'project_manage',
       'tag_manage',
       'idle_review',
@@ -182,7 +186,7 @@ async function stdioDiscovery() {
         tools.some((t) => t.name === name),
         name,
       );
-    record('all ten control tools discoverable');
+    record('all control tools discoverable');
     await stdioDiscovery();
     const project = await write('project_manage', {
       command: 'create',
@@ -245,6 +249,275 @@ async function stdioDiscovery() {
     assert.equal(receipt.duration, 300000);
     assert(!Object.hasOwn(receipt, '_requiredScopes'));
     record('manual time add/set, duplicate suppression and permissioned receipts');
+    const recurringTask = await call('planner_task', {
+      operationId: randomUUID(),
+      fields: {
+        title: 'MCP repeat fixture',
+        projectId: project.id,
+        timeEstimate: 900000,
+      },
+    });
+    const repeatTaskId = recurringTask.taskId;
+    assert.equal(
+      (await call('task_repeat', { command: 'read', taskId: repeatTaskId })).revision,
+      null,
+    );
+    const repeatArgs = {
+      command: 'set',
+      taskId: repeatTaskId,
+      cycle: 'weekly',
+      every: 2,
+      weekdays: ['wed', 'fri'],
+      startDay: '2099-10-28',
+      expectedRevision: null,
+    };
+    const repeatOp = randomUUID();
+    const firstRepeat = await write('task_repeat', repeatArgs, repeatOp);
+    assert.deepEqual(await write('task_repeat', repeatArgs, repeatOp), firstRepeat);
+    let repeatRead = await call('task_repeat', { command: 'read', taskId: repeatTaskId });
+    assert.equal(repeatRead.schedule.cycle, 'weekly');
+    assert.equal(repeatRead.schedule.every, 2);
+    assert.deepEqual(repeatRead.schedule.weekdays, ['wed', 'fri']);
+    assert(repeatRead.dueDay >= repeatArgs.startDay);
+    assert([3, 5].includes(new Date(repeatRead.dueDay + 'T12:00:00Z').getUTCDay()));
+    const stale = await rpc('tools/call', {
+      name: 'task_repeat',
+      arguments: { ...repeatArgs, operationId: randomUUID() },
+    });
+    assert.match(stale.result.content[0].text, /STALE_DATA/);
+    await write('task_repeat', {
+      command: 'set',
+      taskId: repeatTaskId,
+      cycle: 'monthly',
+      startDay: '2099-11-30',
+      expectedRevision: repeatRead.revision,
+    });
+    repeatRead = await call('task_repeat', { command: 'read', taskId: repeatTaskId });
+    assert.equal(repeatRead.repeatCfgId, firstRepeat.repeatCfgId);
+    assert.equal(repeatRead.schedule.cycle, 'monthly');
+    assert.equal(repeatRead.schedule.every, 1);
+    assert.equal(repeatRead.dueDay, '2099-11-30');
+    record(
+      'native repeat creation, weekly days/interval, monthly editing, stale rejection and duplicate suppression',
+    );
+    await write('task_repeat', {
+      command: 'set',
+      taskId: repeatTaskId,
+      cycle: 'monthly',
+      startDay: '2099-11-30',
+      startTime: '12:00',
+      reminder: null,
+      repeatUntilDay: '2099-12-16',
+      paused: false,
+      template: {
+        title: 'Literal future #task +name',
+        timeEstimate: 7200000,
+        notes: 'Private series fixture',
+      },
+      expectedRevision: repeatRead.revision,
+    });
+    repeatRead = await call('task_repeat', { command: 'read', taskId: repeatTaskId });
+    assert.equal(repeatRead.schedule.startTime, '12:00');
+    assert.equal(repeatRead.schedule.repeatUntilDay, '2099-12-16');
+    assert(!JSON.stringify(repeatRead).includes('Private series fixture'));
+    assert.equal(
+      (await call('task_repeat', { command: 'read_template', taskId: repeatTaskId }))
+        .template.notes,
+      'Private series fixture',
+    );
+    record('complete recurrence time/end/template edits and protected note readback');
+
+    const fixture = await call('planner_task', {
+      operationId: randomUUID(),
+      fields: { title: 'Task controls fixture', projectId: project.id },
+    });
+    const managedId = fixture.taskId;
+    const managedRead = (id = managedId, location) =>
+      call('task_manage', {
+        command: 'read',
+        taskId: id,
+        ...(location ? { location } : {}),
+      });
+    const managedWrite = async (
+      command,
+      extra = {},
+      id = managedId,
+      tool = 'task_manage',
+    ) =>
+      write(tool, {
+        command,
+        taskId: id,
+        expectedRevision: (await managedRead(id)).revision,
+        ...extra,
+      });
+    const metadataOp = randomUUID();
+    const metadataArgs = {
+      command: 'update',
+      taskId: managedId,
+      expectedRevision: (await managedRead()).revision,
+      fields: { title: 'Literal #keep +keep 2h', priority: 3, timeEstimate: 7200000 },
+    };
+    await write('task_manage', metadataArgs, metadataOp);
+    await write('task_manage', metadataArgs, metadataOp);
+    let managed = await managedRead();
+    assert.equal(managed.title, 'Literal #keep +keep 2h');
+    assert.equal(managed.priority, 3);
+    const staleTask = await rpc('tools/call', {
+      name: 'task_manage',
+      arguments: { ...metadataArgs, operationId: randomUUID() },
+    });
+    assert.match(staleTask.result.content[0].text, /STALE_DATA/);
+    const scheduleAt = new Date('2099-12-01T12:00:00').getTime();
+    const deadlineAt = new Date('2099-12-16T17:00:00').getTime();
+    await managedWrite('schedule', { at: scheduleAt, remindAt: scheduleAt - 300000 });
+    await managedWrite('deadline', { at: deadlineAt, remindAt: deadlineAt - 600000 });
+    managed = await managedRead();
+    assert.equal(managed.dueWithTime, scheduleAt);
+    assert.equal(managed.deadlineWithTime, deadlineAt);
+    assert.equal(managed.remindAt, scheduleAt - 300000);
+    assert.equal(managed.deadlineRemindAt, deadlineAt - 600000);
+    await managedWrite('unschedule');
+    assert.equal((await managedRead()).deadlineWithTime, deadlineAt);
+    await managedWrite('clear_deadline');
+    assert(!(await managedRead()).deadlineWithTime);
+    const beforePlacement = await managedRead();
+    const structure = await call('task_structure', {
+      command: 'read',
+      taskId: managedId,
+    });
+    assert(structure.contexts.some((c) => c.contextId === project.id));
+    if (structure.contexts.find((c) => c.contextId === project.id).isEnableBacklog) {
+      await managedWrite(
+        'reorder',
+        {
+          contextId: project.id,
+          contextType: 'PROJECT',
+          source: 'UNDONE',
+          target: 'BACKLOG',
+          afterTaskId: null,
+        },
+        managedId,
+        'task_structure',
+      );
+      await managedWrite(
+        'reorder',
+        {
+          contextId: project.id,
+          contextType: 'PROJECT',
+          source: 'BACKLOG',
+          target: 'UNDONE',
+          afterTaskId: null,
+        },
+        managedId,
+        'task_structure',
+      );
+      assert.equal((await managedRead()).dueDay, beforePlacement.dueDay);
+    } else {
+      const disabledBacklog = await rpc('tools/call', {
+        name: 'task_structure',
+        arguments: {
+          command: 'reorder',
+          taskId: managedId,
+          operationId: randomUUID(),
+          expectedRevision: (await managedRead()).revision,
+          contextId: project.id,
+          contextType: 'PROJECT',
+          source: 'UNDONE',
+          target: 'BACKLOG',
+          afterTaskId: null,
+        },
+      });
+      assert.match(disabledBacklog.result.content[0].text, /INVALID_ARGUMENTS/);
+    }
+    assert.equal((await managedRead()).dueWithTime, beforePlacement.dueWithTime);
+    record(
+      'literal task metadata, native priority, independent scheduling/deadlines, CAS and replay',
+    );
+    const child = await managedWrite(
+      'add_subtask',
+      { title: 'Literal child #keep +keep' },
+      managedId,
+      'task_structure',
+    );
+    assert.equal((await managedRead(child.taskId)).title, 'Literal child #keep +keep');
+    assert((await managedRead()).subTaskIds.includes(child.taskId));
+    await managedWrite('detach', {}, child.taskId, 'task_structure');
+    assert(!(await managedRead(child.taskId)).parentId);
+    await managedWrite(
+      'reparent',
+      { parentId: managedId, afterTaskId: null },
+      child.taskId,
+      'task_structure',
+    );
+    assert.equal((await managedRead(child.taskId)).parentId, managedId);
+    await managedWrite('update', { fields: { timeEstimate: 0 } }, child.taskId);
+    const secondChild = await managedWrite(
+      'add_subtask',
+      { title: 'Second child' },
+      managedId,
+      'task_structure',
+    );
+    await managedWrite(
+      'update',
+      { fields: { timeEstimate: 600000 } },
+      secondChild.taskId,
+    );
+    const copied = await managedWrite('duplicate');
+    const copiedTask = await managedRead(copied.taskId);
+    assert.equal(copiedTask.subTaskIds.length, 2);
+    assert.equal(copiedTask.timeEstimate, 600000);
+    assert.equal((await managedRead(copiedTask.subTaskIds[0])).timeEstimate, 0);
+    assert.equal((await managedRead(copiedTask.subTaskIds[1])).timeEstimate, 600000);
+    record('single literal subtask, detach/reparent and native duplication');
+    await managedWrite(
+      'add',
+      {
+        attachment: {
+          type: 'LINK',
+          title: 'Stored reference',
+          path: 'https://example.com/fixture',
+        },
+      },
+      managedId,
+      'task_attachment',
+    );
+    let attached = await call('task_attachment', { command: 'read', taskId: managedId });
+    const reference = attached.attachments.find(
+      (a) => a.path === 'https://example.com/fixture',
+    );
+    assert(reference);
+    await managedWrite(
+      'update',
+      { attachmentId: reference.id, attachment: { title: 'Updated reference' } },
+      managedId,
+      'task_attachment',
+    );
+    await managedWrite(
+      'remove',
+      { attachmentId: reference.id },
+      managedId,
+      'task_attachment',
+    );
+    attached = await call('task_attachment', { command: 'read', taskId: managedId });
+    assert(!attached.attachments.some((a) => a.id === reference.id));
+    await managedWrite('wont_do');
+    managed = await managedRead();
+    assert.equal(managed.isDone, true);
+    assert.equal(managed.doneOn, managed.wontDoOn);
+    await managedWrite('reopen');
+    await managedWrite('archive');
+    const archived = await managedRead(managedId, 'archive');
+    assert(archived.subTaskIds.includes(child.taskId));
+    await write('task_manage', {
+      command: 'restore',
+      taskId: managedId,
+      expectedRevision: archived.revision,
+    });
+    assert.equal((await managedRead(child.taskId)).parentId, managedId);
+    await managedWrite('delete', { confirm: true }, copied.taskId);
+    record(
+      'attachment CRUD, wont-do/reopen, archive/restore subtree and explicit deletion',
+    );
     const settings = await call('app_settings', { command: 'read', section: 'misc' });
     const old = settings.settings.misc.isDisableAnimations;
     await write('app_settings', {
@@ -352,6 +625,18 @@ async function stdioDiscovery() {
       'Fictitious MCP note',
     );
     record('real app restart preserves native writes and suppresses command replay');
+    const repeatAfterRestart = await call('task_repeat', {
+      command: 'read',
+      taskId: repeatTaskId,
+    });
+    assert.equal(repeatAfterRestart.repeatCfgId, firstRepeat.repeatCfgId);
+    assert.equal(repeatAfterRestart.schedule.startDay, '2099-11-30');
+    assert.equal(repeatAfterRestart.schedule.startTime, '12:00');
+    assert.equal(repeatAfterRestart.schedule.repeatUntilDay, '2099-12-16');
+    assert.equal((await managedRead()).priority, 3);
+    assert.equal((await managedRead(child.taskId)).parentId, managedId);
+    assert.deepEqual(await write('task_repeat', repeatArgs, repeatOp), firstRepeat);
+    record('native repeat configuration and duplicate receipt survive restart');
     await page.evaluate(
       (scopes) => window.ea.setAssistantAccessScopes(scopes),
       ['tasks:read'],
@@ -361,6 +646,15 @@ async function stdioDiscovery() {
       arguments: { command: 'start', taskId, operationId: randomUUID() },
     });
     assert(denied.result?.isError || denied.error);
+    const repeatDenied = await rpc('tools/call', {
+      name: 'task_repeat',
+      arguments: {
+        ...repeatArgs,
+        expectedRevision: repeatAfterRestart.revision,
+        operationId: randomUUID(),
+      },
+    });
+    assert(repeatDenied.result?.isError || repeatDenied.error);
     const hidden = (await rpc('tools/list')).result.tools.map((t) => t.name);
     assert(!hidden.includes('app_settings'));
     record('revoked grants block writes and discovery');
