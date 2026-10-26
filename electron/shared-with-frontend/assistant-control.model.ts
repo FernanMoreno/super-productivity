@@ -9,7 +9,6 @@ import {
   validateTaskControlArgs,
   taskControlExtraScopes,
 } from './assistant-task-control.contract';
-
 export const ASSISTANT_CONTROL_PATH = '/assistant/control';
 export interface AssistantControlContext {
   authorize: () => Promise<void>;
@@ -23,49 +22,27 @@ export class ControlError extends Error {
     super(message);
   }
 }
-export const CONTROL_SETTINGS_FIELDS: Record<
-  string,
-  Record<string, 'boolean' | 'duration'>
-> = {
-  misc: Object.fromEntries(
-    [
-      'isConfirmBeforeExit',
-      'isConfirmBeforeExitWithoutFinishDay',
-      'isMinimizeToTray',
-      'isCheckForUpdates',
-      'isDisableAnimations',
-      'isVerticalActionBar',
-      'isDisableCelebration',
-      'isTrayShowCurrentCountdown',
-      'isUseCustomWindowTitleBar',
-    ].map((key) => [key, 'boolean']),
-  ),
-  tasks: Object.fromEntries(
-    [
-      'isAutoMarkParentAsDone',
-      'isAutoAddWorkedOnToToday',
-      'isConfirmBeforeDelete',
-      'isTrayShowCurrent',
-      'isMarkdownFormattingInNotesEnabled',
-    ].map((key) => [key, 'boolean']),
-  ),
-  timeTracking: Object.fromEntries(
-    [
-      'isAutoStartNextTask',
-      'isNotifyWhenTimeEstimateExceeded',
-      'isTrackingReminderEnabled',
-      'isTrackingReminderShowOnMobile',
-      'isTrackingReminderNotify',
-      'isTrackingReminderFocusWindow',
-    ].map((key) => [key, 'boolean']),
-  ),
-  idle: {
-    isEnableIdleTimeTracking: 'boolean',
-    isOnlyOpenIdleWhenCurrentTask: 'boolean',
-    isSuppressIdleDuringFocusMode: 'boolean',
-    minIdleTime: 'duration',
-  },
-};
+export const CONTROL_SETTINGS_SECTIONS = [
+  'appFeatures',
+  'localization',
+  'misc',
+  'tasks',
+  'shortSyntax',
+  'evaluation',
+  'idle',
+  'takeABreak',
+  'pomodoro',
+  'flowtime',
+  'keyboard',
+  'localBackup',
+  'sound',
+  'timeTracking',
+  'reminder',
+  'schedule',
+  'focusMode',
+  'taskWidget',
+  'focusModeLocal',
+] as const;
 const id = { type: 'string', pattern: '^[A-Za-z0-9_-]{1,200}$', maxLength: 200 };
 const operation = {
   type: 'string',
@@ -181,14 +158,15 @@ export const CONTROL_CONTRACTS: Record<string, ControlContract> = {
   app_settings: {
     commands: ['read', 'update'],
     properties: {
-      section: { type: 'string', enum: Object.keys(CONTROL_SETTINGS_FIELDS) },
-      changes: { type: 'object', maxProperties: 30 },
-      expected: { type: 'object', maxProperties: 30 },
+      section: { type: 'string', enum: CONTROL_SETTINGS_SECTIONS },
+      includeNotesTemplate: { type: 'boolean' },
+      changes: { type: 'object', maxProperties: 100 },
+      expected: { type: 'object', maxProperties: 100 },
     },
     baseScopes: ['settings:read'],
     writeScopes: ['settings:write'],
     description:
-      'Read/update supported misc, tasks, timeTracking and idle preferences only. Read returns supported fields; update requires section, changes and matching expected current fields (null for absent). Durations are milliseconds. Never exposes sync credentials or changes assistant grants.',
+      'Read/update built-in preferences across appFeatures, localization, misc, tasks, shortSyntax, evaluation, idle, takeABreak, pomodoro, flowtime, keyboard, localBackup, sound, timeTracking, reminder, schedule, focusMode, taskWidget and focusModeLocal. Read returns supported fields; update requires section, changes and matching expected current fields (null for absent). Durations are milliseconds; taskWidget and focusModeLocal remain local to this device. Set includeNotesTemplate=true on a read to include that protected field; it requires tasks:read_notes. Updating notesTemplate requires tasks:read_notes and tasks:write_notes. Never exposes sync credentials or changes assistant grants.',
   },
   app_sync: {
     commands: ['status', 'run'],
@@ -224,6 +202,19 @@ export const controlScopes = (
 ): readonly AssistantAccessScope[] => {
   const contract = CONTROL_CONTRACTS[tool];
   if (!contract) return [];
+  const settingsChanges = args['changes'];
+  const changesNotesTemplate =
+    tool === 'app_settings' &&
+    args['command'] === 'update' &&
+    args['section'] === 'tasks' &&
+    !!settingsChanges &&
+    typeof settingsChanges === 'object' &&
+    !Array.isArray(settingsChanges) &&
+    Object.hasOwn(settingsChanges, 'notesTemplate');
+  const readsNotesTemplate =
+    tool === 'app_settings' &&
+    args['command'] === 'read' &&
+    args['includeNotesTemplate'] === true;
   return [
     ...contract.baseScopes,
     ...taskControlExtraScopes(tool, args),
@@ -237,6 +228,8 @@ export const controlScopes = (
     ...(tool === 'task_repeat' && args['command'] === 'set' && repeatWritesNotes(args)
       ? ['tasks:write_notes' as const]
       : []),
+    ...(changesNotesTemplate ? (['tasks:read_notes', 'tasks:write_notes'] as const) : []),
+    ...(readsNotesTemplate ? (['tasks:read_notes'] as const) : []),
     ...(tool === 'idle_review' && args['command'] === 'track_task'
       ? ['tasks:read' as const]
       : []),
@@ -398,9 +391,19 @@ export const validateControlArgs = (
     const section = args['section'];
     if (
       section !== undefined &&
-      (typeof section !== 'string' || !has(CONTROL_SETTINGS_FIELDS, section))
+      (typeof section !== 'string' ||
+        !(CONTROL_SETTINGS_SECTIONS as readonly string[]).includes(section))
     )
       return 'Unsupported settings section';
+    if (
+      has(args, 'includeNotesTemplate') &&
+      (command !== 'read' ||
+        typeof args['includeNotesTemplate'] !== 'boolean' ||
+        (args['includeNotesTemplate'] === true &&
+          section !== undefined &&
+          section !== 'tasks'))
+    )
+      return 'includeNotesTemplate is only supported when reading all settings or tasks';
     if (command === 'read' && (has(args, 'changes') || has(args, 'expected')))
       return 'Read accepts no changes';
     if (command === 'update') {
@@ -413,23 +416,7 @@ export const validateControlArgs = (
         !Object.keys(changes).length ||
         Object.keys(changes).sort().join() !== Object.keys(expected).sort().join()
       )
-        return 'Changes and expected require the same nonempty set of supported fields';
-      for (const key of Object.keys(changes)) {
-        const kind = CONTROL_SETTINGS_FIELDS[section][key];
-        const valid = (v: unknown): boolean =>
-          kind === 'boolean'
-            ? typeof v === 'boolean'
-            : kind === 'duration' &&
-              Number.isSafeInteger(v) &&
-              (v as number) >= 60000 &&
-              (v as number) <= 86400000;
-        if (
-          !has(CONTROL_SETTINGS_FIELDS[section], key) ||
-          !valid(changes[key]) ||
-          (expected[key] !== null && !valid(expected[key]))
-        )
-          return 'Unsupported settings field or value';
-      }
+        return 'Changes and expected require the same nonempty field set';
     }
   }
   return undefined;

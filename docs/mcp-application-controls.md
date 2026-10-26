@@ -14,7 +14,7 @@ Esta ampliación local añade controles nativos al servidor MCP de Electron. La 
 | `project_manage`           | `create`, `update`, `archive`, `reopen`                  | `tasks:read` + `projects:write`                                                              |
 | `tag_manage`               | `create`, `update`, `delete`                             | `tasks:read` + `tags:write`                                                                  |
 | `idle_review`              | `status`, `discard`, `track_break`, `track_task`         | `idle:read`; resolver: `idle:write` + `time:write`; tarea: también `tasks:read`              |
-| `app_settings`             | `read`, `update`                                         | `settings:read`; actualizar: también `settings:write`                                        |
+| `app_settings`             | `read`, `update`                                         | `settings:read`; actualizar: también `settings:write`; plantilla de notas: permisos de notas |
 | `app_sync`                 | `status`, `run`                                          | `sync:read`; ejecutar: también `sync:write`                                                  |
 | `app_update`               | `status`, `check`, `install`                             | `updates:read`; comprobar/instalar: también `updates:write`                                  |
 | `control_operation_status` | `status`                                                 | `tasks:read` y todos los permisos de la operación original                                   |
@@ -69,7 +69,15 @@ Consulta `idle_review.status` y utiliza su `reviewId` y `idleTime` como `expecte
 
 ## Ajustes, sincronización y actualización
 
-`app_settings.read` devuelve exclusivamente las preferencias admitidas de `misc`, `tasks`, `timeTracking` e `idle`. Puede limitarse por `section`. `update` requiere `section`, `changes` y `expected` con exactamente las mismas claves; utiliza los valores leídos y `null` si el campo no existía. `minIdleTime` admite 60 000–86 400 000 ms. No devuelve ni modifica claves de acceso, contraseñas, proveedores o cifrado.
+`app_settings.read` devuelve las preferencias integradas admitidas de `appFeatures`, `localization`, `misc`, `tasks`, `shortSyntax`, `evaluation`, `idle`, `takeABreak`, `pomodoro`, `flowtime`, `keyboard`, `localBackup`, `sound`, `timeTracking`, `reminder`, `schedule` y `focusMode`. Puede limitarse por `section`; sin sección devuelve el catálogo completo. `taskWidget` y `focusModeLocal` se guardan solo en este dispositivo.
+
+Lee primero el ajuste y copia su valor actual en `expected`; después envía el nuevo valor en `changes`. Ambos objetos deben contener exactamente las mismas claves. Los cambios compartidos pasan por la configuración nativa; el MCP rechaza escrituras obsoletas, claves desconocidas y actualizaciones parciales con valores incorrectos.
+
+Los tiempos de horario usan `H:mm` o `HH:mm`; las duraciones y las reglas de Flowtime usan milisegundos. Los volúmenes de sonido admiten enteros de 0 a 100; el porcentaje de descanso Flowtime, de 1 a 100; la opacidad del widget, de 10 a 100. El primer día de la semana admite 0–6; la hora del aviso de fecha límite, 0–23. Los sonidos, idiomas, formato de fecha, recordatorios, modo Flowtime y preset de prioridad se limitan a las opciones de la interfaz. Las teclas rápidas integradas admiten texto o `null` para quitarlas. `minIdleTime` admite 60 000–86 400 000 ms; el máximo de copias locales usa el rango de la configuración nativa.
+
+`tasks.notesTemplate` se omite por defecto. Añade `includeNotesTemplate: true` a una lectura de todos los ajustes o de `tasks` para incluirlo; esa lectura requiere `tasks:read_notes`. Modificarlo requiere `tasks:read_notes` y `tasks:write_notes`. Sin permiso de lectura, el MCP omite su contenido incluso en las respuestas a otros cambios de ajustes.
+
+No devuelve ni modifica claves de acceso, contraseñas, proveedores de sincronización, cifrado, permisos MCP, ajustes de plugins, rutas/imagenes, CSS o temas personalizados, referencias a proyectos/páginas ni teclas rápidas de plugins.
 
 `app_sync.run` solicita una sincronización normal del proveedor ya configurado. Devuelve estados como `disabled`, `not_ready`, `busy`, `completed`, `handled_error` o `attention_required`. No configura credenciales ni fuerza una sustitución de datos remotos/locales.
 

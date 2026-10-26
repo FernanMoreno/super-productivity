@@ -2,13 +2,16 @@ import { inject, Injectable } from '@angular/core';
 import { MatDialog, MatDialogRef, MatDialogState } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
 import { firstValueFrom } from 'rxjs';
-import {
-  AssistantControlContext,
-  ControlError,
-  CONTROL_SETTINGS_FIELDS,
-} from '../../../../electron/shared-with-frontend/assistant-control.model';
+import { ControlError } from '../../../../electron/shared-with-frontend/assistant-control.model';
+import type { AssistantControlContext } from '../../../../electron/shared-with-frontend/assistant-control.model';
 import { GlobalConfigService } from '../config/global-config.service';
-import { GlobalConfigSectionKey } from '../config/global-config.model';
+import {
+  FocusModeLocalConfig,
+  GlobalConfigSectionKey,
+  TaskWidgetConfig,
+} from '../config/global-config.model';
+import { TaskWidgetSettingsService } from '../config/task-widget-settings.service';
+import { FocusModeLocalSettingsService } from '../config/focus-mode-local-settings.service';
 import { DialogIdleComponent } from '../idle/dialog-idle/dialog-idle.component';
 import { DialogIdleReturnData } from '../idle/dialog-idle/dialog-idle.model';
 import { selectIsIdleTimeFrozen } from '../idle/store/idle.selectors';
@@ -20,10 +23,40 @@ import { isUpdateCheckPossible } from '../../core/update-check/is-update-check-p
 import { environment } from '../../../environments/environment';
 
 type IdleRef = MatDialogRef<DialogIdleComponent, DialogIdleReturnData>;
+type ControlSettingsFields =
+  typeof import('../../../../electron/shared-with-frontend/assistant-settings-control.model').CONTROL_SETTINGS_FIELDS;
+const sameSettingValue = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b))
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => sameSettingValue(value, b[index]))
+    );
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aKeys = Object.keys(a).sort();
+    const bKeys = Object.keys(b).sort();
+    return (
+      aKeys.length === bKeys.length &&
+      aKeys.every(
+        (key, index) =>
+          key === bKeys[index] &&
+          sameSettingValue(
+            (a as Record<string, unknown>)[key],
+            (b as Record<string, unknown>)[key],
+          ),
+      )
+    );
+  }
+  return false;
+};
 
 @Injectable({ providedIn: 'root' })
 export class AssistantSystemControlService {
   private readonly _config = inject(GlobalConfigService);
+  private readonly _taskWidget = inject(TaskWidgetSettingsService);
+  private readonly _focusModeLocal = inject(FocusModeLocalSettingsService);
   private readonly _dialogs = inject(MatDialog);
   private readonly _store = inject(Store);
   private readonly _tasks = inject(TaskService);
@@ -193,18 +226,26 @@ export class AssistantSystemControlService {
     };
   }
 
-  private _safeSettings(section?: string): Record<string, Record<string, unknown>> {
+  private _safeSettings(
+    fieldsCatalog: ControlSettingsFields,
+    section?: string,
+    includeNotesTemplate = false,
+  ): Record<string, Record<string, unknown>> {
     const cfg = this._config.cfg();
     if (!cfg) throw new ControlError('BUSY', 'Settings have not loaded');
     const result: Record<string, Record<string, unknown>> = {};
-    for (const [key, fields] of Object.entries(CONTROL_SETTINGS_FIELDS)) {
+    for (const [key, fields] of Object.entries(fieldsCatalog)) {
       if (section && section !== key) continue;
-      const source = cfg[key as GlobalConfigSectionKey] as unknown as Record<
-        string,
-        unknown
-      >;
+      const source: Record<string, unknown> =
+        key === 'taskWidget'
+          ? (this._taskWidget.settings() as unknown as Record<string, unknown>)
+          : key === 'focusModeLocal'
+            ? (this._focusModeLocal.settings() as unknown as Record<string, unknown>)
+            : (cfg as unknown as Record<string, Record<string, unknown>>)[key];
       result[key] = Object.fromEntries(
-        Object.keys(fields).map((field) => [field, source?.[field] ?? null]),
+        Object.keys(fields)
+          .filter((field) => includeNotesTemplate || field !== 'notesTemplate')
+          .map((field) => [field, source?.[field] ?? null]),
       );
     }
     if (!Object.keys(result).length)
@@ -216,36 +257,25 @@ export class AssistantSystemControlService {
     args: Record<string, unknown>,
     context: AssistantControlContext,
   ): Promise<Record<string, unknown>> {
+    const { CONTROL_SETTINGS_FIELDS, validateControlSettingsArgs } =
+      await import('../../../../electron/shared-with-frontend/assistant-settings-control.model');
     const section = args.section as string | undefined;
     if (args.command === 'update') {
+      const error = validateControlSettingsArgs(args);
+      if (error) throw new ControlError('INVALID_ARGUMENT', error);
       const changes = args.changes as Record<string, unknown>;
       const expected = args.expected as Record<string, unknown>;
-      const fields = section && CONTROL_SETTINGS_FIELDS[section];
-      if (
-        !fields ||
-        !changes ||
-        !expected ||
-        !Object.keys(changes).length ||
-        Object.keys(changes).length !== Object.keys(expected).length ||
-        Object.entries(changes).some(([key, value]) => {
-          if (!Object.hasOwn(fields, key) || !Object.hasOwn(expected, key)) return true;
-          const valid = (v: unknown): boolean =>
-            fields[key] === 'boolean'
-              ? typeof v === 'boolean'
-              : Number.isSafeInteger(v) &&
-                (v as number) >= 60000 &&
-                (v as number) <= 86400000;
-          return !valid(value) || (expected[key] !== null && !valid(expected[key]));
-        })
-      ) {
-        throw new ControlError(
-          'INVALID_ARGUMENT',
-          'Unsupported settings fields or values',
-        );
-      }
       const checkExpected = (): void => {
-        const current = this._safeSettings(section)[section!];
-        if (Object.keys(changes).some((key) => current[key] !== expected[key])) {
+        const current = this._safeSettings(
+          CONTROL_SETTINGS_FIELDS,
+          section,
+          Object.hasOwn(changes, 'notesTemplate'),
+        )[section!];
+        if (
+          Object.keys(changes).some(
+            (key) => !sameSettingValue(current[key], expected[key]),
+          )
+        ) {
           throw new ControlError('CONFLICT', 'Settings have changed; read them again');
         }
       };
@@ -253,9 +283,18 @@ export class AssistantSystemControlService {
       await context.authorize();
       checkExpected();
       context.markMutation();
-      this._config.updateSection(section as GlobalConfigSectionKey, changes, true);
+      if (section === 'taskWidget')
+        this._taskWidget.update(changes as Partial<TaskWidgetConfig>);
+      else if (section === 'focusModeLocal')
+        this._focusModeLocal.update(changes as Partial<FocusModeLocalConfig>);
+      else this._config.updateSection(section as GlobalConfigSectionKey, changes, true);
     }
-    const settings = this._safeSettings(section);
+    const settings = this._safeSettings(
+      CONTROL_SETTINGS_FIELDS,
+      section,
+      args['includeNotesTemplate'] === true ||
+        Object.hasOwn((args['changes'] as object) ?? {}, 'notesTemplate'),
+    );
     return { settings, revision: JSON.stringify(settings) };
   }
 

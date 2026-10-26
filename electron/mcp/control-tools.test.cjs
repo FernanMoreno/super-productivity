@@ -231,7 +231,7 @@ test('revoked note read permission prevents response leakage', async () => {
 test('receipt lookup rechecks original permissions and strips internal grant metadata', async () => {
   const data = {
     status: 'applied',
-    settings: { private: true },
+    settings: { private: true, tasks: { notesTemplate: 'private-template' } },
     _requiredScopes: ['settings:write'],
   };
   const args = { command: 'status', operationId: 'operation-123' };
@@ -247,10 +247,11 @@ test('receipt lookup rechecks original permissions and strips internal grant met
     args,
     grants(),
     async () => ({ status: 200, body: { ok: true, data } }),
-    grants,
+    () => ['tasks:read', 'settings:write'],
   );
   assert.equal(allowed.isError, undefined);
   assert.doesNotMatch(JSON.stringify(allowed), /_requiredScopes/);
+  assert.doesNotMatch(JSON.stringify(allowed), /private-template/);
 });
 test('invalid dates, oversized notes and structural entity fields reject', async () => {
   const cases = [
@@ -413,6 +414,157 @@ test('unknown or malformed mutation replies retain honest uncertain outcome', as
     assert.match(r.content[0].text, /OUTCOME_UNKNOWN/);
     assert.doesNotMatch(JSON.stringify(r), /private/);
   }
+});
+test('app settings validates ordinary, nested and device-local preferences', async () => {
+  const valid = {
+    command: 'update',
+    section: 'flowtime',
+    changes: {
+      breakRules: [{ minDuration: 0, maxDuration: 1500000, breakDuration: 300000 }],
+    },
+    expected: {
+      breakRules: [{ minDuration: 0, maxDuration: 1500000, breakDuration: 300000 }],
+    },
+    operationId: 'settings-operation-1',
+  };
+  let forwarded;
+  const accepted = await tool('app_settings').run(
+    valid,
+    grants(),
+    async (request) => {
+      forwarded = request;
+      return reply(request);
+    },
+    grants,
+  );
+  assert.equal(accepted.isError, undefined);
+  assert.deepEqual(forwarded.body.args, valid);
+  const keyboard = await tool('app_settings').run(
+    {
+      command: 'update',
+      section: 'keyboard',
+      changes: { taskToggleDone: 'Ctrl+Shift+D' },
+      expected: { taskToggleDone: 'D' },
+      operationId: 'settings-operation-2',
+    },
+    grants(),
+    async (request) => reply(request),
+    grants,
+  );
+  assert.equal(keyboard.isError, undefined);
+
+  for (const patch of [
+    {
+      section: 'schedule',
+      changes: { workStart: '25:00' },
+      expected: { workStart: '9:00' },
+    },
+    { section: 'sound', changes: { volume: 101 }, expected: { volume: 50 } },
+    {
+      section: 'flowtime',
+      changes: {
+        breakRules: [{ minDuration: 60000, maxDuration: 0, breakDuration: 60000 }],
+      },
+      expected: { breakRules: [] },
+    },
+    {
+      section: 'keyboard',
+      changes: { 'plugin_custom:shortcut': 'Ctrl+X' },
+      expected: { 'plugin_custom:shortcut': null },
+    },
+    {
+      section: 'misc',
+      changes: { backgroundImageDark: 'C:\\private\\image.png' },
+      expected: { backgroundImageDark: null },
+    },
+    { section: 'sync', changes: { password: 'secret' }, expected: { password: null } },
+  ]) {
+    let calls = 0;
+    const rejected = await tool('app_settings').run(
+      { ...valid, ...patch },
+      grants(),
+      async () => {
+        calls++;
+        return reply({ body: { tool: 'app_settings' } });
+      },
+      grants,
+    );
+    assert.equal(rejected.isError, true, JSON.stringify(patch));
+    assert.equal(calls, 0, JSON.stringify(patch));
+  }
+});
+test('app settings protects the task notes template with notes permissions', async () => {
+  const args = { command: 'read' };
+  const privateResult = await tool('app_settings').run(
+    args,
+    ['settings:read'],
+    async () => ({
+      status: 200,
+      body: {
+        ok: true,
+        data: {
+          settings: {
+            tasks: { notesTemplate: 'private-template', isTrayShowCurrent: true },
+          },
+          revision: '{"tasks":{"notesTemplate":"private-template"}}',
+        },
+      },
+    }),
+    () => ['settings:read'],
+  );
+  assert.doesNotMatch(JSON.stringify(privateResult), /private-template/);
+  assert.match(privateResult.content[0].text, /isTrayShowCurrent/);
+
+  let noteReadCalls = 0;
+  const deniedRead = await tool('app_settings').run(
+    { command: 'read', section: 'tasks', includeNotesTemplate: true },
+    ['settings:read'],
+    async () => {
+      noteReadCalls++;
+      return reply({ body: { tool: 'app_settings' } });
+    },
+    () => ['settings:read'],
+  );
+  assert.equal(deniedRead.isError, true);
+  assert.equal(noteReadCalls, 0);
+
+  const notesArgs = {
+    command: 'read',
+    section: 'tasks',
+    includeNotesTemplate: true,
+  };
+  const allowedResult = await tool('app_settings').run(
+    notesArgs,
+    ['settings:read', 'tasks:read_notes'],
+    async () => ({
+      status: 200,
+      body: {
+        ok: true,
+        data: { settings: { tasks: { notesTemplate: 'private-template' } } },
+      },
+    }),
+    () => ['settings:read', 'tasks:read_notes'],
+  );
+  assert.match(JSON.stringify(allowedResult), /private-template/);
+
+  let forwarded = 0;
+  const update = await tool('app_settings').run(
+    {
+      command: 'update',
+      section: 'tasks',
+      changes: { notesTemplate: 'new template' },
+      expected: { notesTemplate: 'old template' },
+      operationId: 'notes-template-1',
+    },
+    ['settings:read', 'settings:write', 'tasks:read_notes'],
+    async () => {
+      forwarded++;
+      return reply({ body: { tool: 'app_settings' } });
+    },
+    () => ['settings:read', 'settings:write', 'tasks:read_notes'],
+  );
+  assert.equal(update.isError, true);
+  assert.equal(forwarded, 0);
 });
 test('native runtime error codes retain safe useful identity', async () => {
   for (const code of [

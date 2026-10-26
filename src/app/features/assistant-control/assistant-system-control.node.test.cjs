@@ -36,6 +36,8 @@ Module._load = function (request, parent, ...rest) {
       'task.service': 'TaskService',
       'sync-wrapper.service': 'SyncWrapperService',
       'update-check.service': 'UpdateCheckService',
+      'task-widget-settings.service': 'TaskWidgetSettingsService',
+      'focus-mode-local-settings.service': 'FocusModeLocalSettingsService',
     };
     for (const [suffix, name] of Object.entries(services))
       if (request.endsWith(suffix)) return { [name]: token(name) };
@@ -52,12 +54,23 @@ try {
 function fixture() {
   const calls = [];
   const cfg = {
-    misc: { isDisableAnimations: false, unsplashApiKey: 'secret' },
-    tasks: { isAutoMarkParentAsDone: false, notesTemplate: 'secret' },
+    appFeatures: { isFocusModeEnabled: false },
+    localization: { lng: 'es' },
+    misc: { isDisableAnimations: false, unsplashApiKey: 'credential-secret' },
+    tasks: { isAutoMarkParentAsDone: false, notesTemplate: '**template**' },
     timeTracking: { isAutoStartNextTask: false },
     idle: { minIdleTime: 60000 },
-    sync: { isEnabled: true, syncProvider: 'WebDAV', password: 'secret' },
+    schedule: { workStart: '9:00' },
+    flowtime: {
+      isBreakEnabled: true,
+      breakMode: 'rule',
+      breakRules: [{ minDuration: 0, maxDuration: 1500000, breakDuration: 300000 }],
+    },
+    keyboard: { taskToggleDone: 'D' },
+    sync: { isEnabled: true, syncProvider: 'WebDAV', password: 'sync-secret' },
   };
+  const taskWidgetSettings = { isEnabled: false, isAlwaysShow: false, opacity: 95 };
+  const focusModeLocalSettings = { isLoopBreakEndAlarm: false };
   const config = {
     cfg: () => cfg,
     updateSection: (section, changes) => {
@@ -116,6 +129,26 @@ function fixture() {
     ],
     [token('SyncWrapperService'), sync],
     [token('UpdateCheckService'), update],
+    [
+      token('TaskWidgetSettingsService'),
+      {
+        settings: () => taskWidgetSettings,
+        update: (changes) => {
+          calls.push('widget');
+          Object.assign(taskWidgetSettings, changes);
+        },
+      },
+    ],
+    [
+      token('FocusModeLocalSettingsService'),
+      {
+        settings: () => focusModeLocalSettings,
+        update: (changes) => {
+          calls.push('focus-mode-local');
+          Object.assign(focusModeLocalSettings, changes);
+        },
+      },
+    ],
   ]);
   const service = new AssistantSystemControlService();
   const context = {
@@ -127,6 +160,8 @@ function fixture() {
     context,
     calls,
     cfg,
+    taskWidgetSettings,
+    focusModeLocalSettings,
     sync,
     update,
     ref,
@@ -136,11 +171,27 @@ function fixture() {
   };
 }
 
-test('settings projection omits credentials and task templates', async () => {
+test('settings projection reads built-in and local preferences without exposing provider credentials', async () => {
   const f = fixture();
   const result = await f.service.run('app_settings', { command: 'read' }, f.context);
-  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.ok(!JSON.stringify(result).includes('credential-secret'));
+  assert.ok(!JSON.stringify(result).includes('sync-secret'));
   assert.equal(result.settings.misc.isDisableAnimations, false);
+  assert.ok(!Object.hasOwn(result.settings.tasks, 'notesTemplate'));
+  assert.equal(result.settings.appFeatures.isFocusModeEnabled, false);
+  assert.equal(result.settings.localization.lng, 'es');
+  assert.equal(result.settings.schedule.workStart, '9:00');
+  assert.equal(result.settings.keyboard.taskToggleDone, 'D');
+  assert.equal(result.settings.taskWidget.opacity, 95);
+  assert.equal(result.settings.focusModeLocal.isLoopBreakEndAlarm, false);
+  assert.ok(!Object.hasOwn(result.settings.misc, 'unsplashApiKey'));
+  assert.ok(!Object.hasOwn(result.settings, 'sync'));
+  const withNotes = await f.service.run(
+    'app_settings',
+    { command: 'read', section: 'tasks', includeNotesTemplate: true },
+    f.context,
+  );
+  assert.equal(withNotes.settings.tasks.notesTemplate, '**template**');
 });
 test('settings expected-value conflict is atomic and safe update is authorized', async () => {
   const f = fixture();
@@ -169,6 +220,100 @@ test('settings expected-value conflict is atomic and safe update is authorized',
     f.context,
   );
   assert.deepEqual(f.calls, ['authorize', 'mutation', 'settings']);
+});
+test('settings updates nested values through shared config and compares structures by value', async () => {
+  const f = fixture();
+  const rules = [{ minDuration: 0, maxDuration: 1800000, breakDuration: 300000 }];
+  await f.service.run(
+    'app_settings',
+    {
+      command: 'update',
+      section: 'flowtime',
+      changes: { breakRules: rules },
+      expected: {
+        breakRules: [{ breakDuration: 300000, maxDuration: 1500000, minDuration: 0 }],
+      },
+    },
+    f.context,
+  );
+  assert.deepEqual(f.cfg.flowtime.breakRules, rules);
+  assert.deepEqual(f.calls.slice(-3), ['authorize', 'mutation', 'settings']);
+});
+test('notes template can be updated through its protected app-settings field', async () => {
+  const f = fixture();
+  await f.service.run(
+    'app_settings',
+    {
+      command: 'update',
+      section: 'tasks',
+      changes: { notesTemplate: 'updated' },
+      expected: { notesTemplate: '**template**' },
+    },
+    f.context,
+  );
+  assert.equal(f.cfg.tasks.notesTemplate, 'updated');
+});
+test('native settings rejects malformed values before authorization or mutation', async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.service.run(
+      'app_settings',
+      {
+        command: 'update',
+        section: 'schedule',
+        changes: { workStart: '25:00' },
+        expected: { workStart: '9:00' },
+      },
+      f.context,
+    ),
+    { code: 'INVALID_ARGUMENT' },
+  );
+  assert.deepEqual(f.calls, []);
+});
+test('device-local settings use their own services instead of shared config', async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.service.run(
+      'app_settings',
+      {
+        command: 'update',
+        section: 'taskWidget',
+        changes: { opacity: 80 },
+        expected: { opacity: 90 },
+      },
+      f.context,
+    ),
+    { code: 'CONFLICT' },
+  );
+  assert.deepEqual(f.calls, []);
+  await f.service.run(
+    'app_settings',
+    {
+      command: 'update',
+      section: 'taskWidget',
+      changes: { opacity: 80 },
+      expected: { opacity: 95 },
+    },
+    f.context,
+  );
+  assert.equal(f.taskWidgetSettings.opacity, 80);
+  assert.deepEqual(f.calls.slice(-3), ['authorize', 'mutation', 'widget']);
+  await f.service.run(
+    'app_settings',
+    {
+      command: 'update',
+      section: 'focusModeLocal',
+      changes: { isLoopBreakEndAlarm: true },
+      expected: { isLoopBreakEndAlarm: false },
+    },
+    f.context,
+  );
+  assert.equal(f.focusModeLocalSettings.isLoopBreakEndAlarm, true);
+  assert.deepEqual(f.calls.slice(-3), ['authorize', 'mutation', 'focus-mode-local']);
+  assert.deepEqual(
+    f.calls.filter((call) => call === 'settings'),
+    [],
+  );
 });
 test('settings rechecks expected values after awaiting authorization', async () => {
   const f = fixture();
@@ -205,7 +350,7 @@ test('native settings refuses unsupported keys even without transport validation
     ),
     { code: 'INVALID_ARGUMENT' },
   );
-  assert.equal(f.cfg.misc.unsplashApiKey, 'secret');
+  assert.equal(f.cfg.misc.unsplashApiKey, 'credential-secret');
 });
 test('idle uses one stable review identity and closes real dialog with native counter/focus semantics', async () => {
   const f = fixture();

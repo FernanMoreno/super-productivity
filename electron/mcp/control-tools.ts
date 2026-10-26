@@ -6,6 +6,7 @@ import {
   isControlMutation,
   validateControlArgs,
 } from '../shared-with-frontend/assistant-control.model';
+import { validateControlSettingsArgs } from '../shared-with-frontend/assistant-settings-control.model';
 import {
   MAX_RESPONSE_BYTES,
   ToolSpec,
@@ -53,6 +54,20 @@ const FAILURE_MESSAGES: Record<string, string> = {
   SYNC_BUSY: 'A synchronization is already running.',
 };
 
+const hideTaskNotesTemplate = (
+  data: Record<string, unknown>,
+  scopes: readonly string[],
+): Record<string, unknown> => {
+  if (scopes.includes('tasks:read_notes')) return data;
+  const settings = data['settings'];
+  if (!isRecord(settings) || !isRecord(settings['tasks'])) return data;
+  const tasks = { ...settings['tasks'] };
+  if (!Object.hasOwn(tasks, 'notesTemplate')) return data;
+  delete tasks['notesTemplate'];
+  const safeSettings = { ...settings, tasks };
+  return { ...data, settings: safeSettings, revision: JSON.stringify(safeSettings) };
+};
+
 export const CONTROL_TOOLS: ToolSpec[] = Object.entries(CONTROL_CONTRACTS).map(
   ([name, contract]): ToolSpec => ({
     requiredScopes: contract.baseScopes,
@@ -65,7 +80,9 @@ export const CONTROL_TOOLS: ToolSpec[] = Object.entries(CONTROL_CONTRACTS).map(
       inputSchema: controlInputSchema(name),
     },
     run: async (args, _scopes, forward, getScopes) => {
-      const error = validateControlArgs(name, args);
+      const error =
+        validateControlArgs(name, args) ??
+        (name === 'app_settings' ? validateControlSettingsArgs(args) : undefined);
       if (error) return invalid(error);
       const required = controlScopes(name, args);
       const grantedScopes = [...getScopes()];
@@ -108,6 +125,9 @@ export const CONTROL_TOOLS: ToolSpec[] = Object.entries(CONTROL_CONTRACTS).map(
             : 'The result exceeds the application control response limit.',
         );
       let data = reply.body.data;
+      if (name === 'app_settings' || name === 'control_operation_status') {
+        data = hideTaskNotesTemplate(data, getScopes());
+      }
       if (name === 'control_operation_status') {
         const original = data['_requiredScopes'];
         const current = new Set<string>(getScopes());
